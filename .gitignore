@@ -1,0 +1,4 @@
+/target/
+*.csv
+DATASET BACKUP/
+src/*.exe

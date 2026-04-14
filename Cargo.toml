@@ -1,0 +1,11 @@
+[package]
+name = "gyges-tools"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "0.8.5"
+# gyges = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges" }
+# gyges_engine = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges_engine" }
