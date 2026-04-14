@@ -39,7 +39,7 @@ fn main() {
     // data.print_summary();
 
     // Generate training data
-    engine_analyser.generate_data_parallel(50000, 16);
+    engine_analyser.generate_data_parallel(50000, 12);
 
     engine_analyser.quit();
 
