@@ -14,7 +14,7 @@ fn main() {
     // Engines
     let hce_baseline = EngineConfig {
         name: String::from("UPDATED BASELINE"),
-        path: String::from("./engines/UPDATED_BASELINE"),
+        path: String::from("./engines/baseline"),
     };
 
     // Setup
@@ -39,7 +39,7 @@ fn main() {
     // data.print_summary();
 
     // Generate training data
-    engine_analyser.generate_data_parallel(50000, 3);
+    engine_analyser.generate_data_parallel(50000, 1);
 
     engine_analyser.quit();
 
