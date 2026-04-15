@@ -407,7 +407,7 @@ impl EngineAnalyzer {
             println!("[data gen] game {}/{} ({})", game + 1, game_count, if p1_goes_first { "P1 first" } else { "P2 first" });
             let board = gen_board();
 
-            let (positions, _depths) = self.data_sim_game(board, p1_goes_first);
+            let (positions, _depths, _time_caps) = self.data_sim_game(board, p1_goes_first);
 
             // First position's score is from the first mover's perspective;
             // convert back to absolute (P1 positive) for stats.
@@ -447,8 +447,8 @@ impl EngineAnalyzer {
     /// Simulates one game with engine_1 as Player One and engine_2 as Player Two.
     /// Player One always goes first; the starting board is never flipped.
     ///
-    /// Returns a Vec of `(board, score)` — one entry per half-move, plus depths.
-    fn data_sim_game(&mut self, starting_board: BoardState, p1_goes_first: bool) -> (Vec<(BoardState, f64)>, Vec<f64>) {
+    /// Returns (positions, depths, time_cap_hits).
+    fn data_sim_game(&mut self, starting_board: BoardState, p1_goes_first: bool) -> (Vec<(BoardState, f64)>, Vec<f64>, usize) {
         sim_game_for_data(
             &mut self.engine_1,
             starting_board, p1_goes_first,
@@ -505,9 +505,7 @@ impl EngineAnalyzer {
 /// Standalone game simulation for training data. Used by both single-threaded
 /// `generate_data` and parallel `data_gen_worker`.
 ///
-/// Returns a Vec of `(board, score)` — one entry per half-move, plus a Vec of
-/// depths reached per move. `board` is from the perspective of the player to move.
-/// `score` is from that player's perspective: +1 if they won, -1 if they lost, 0 for a draw.
+/// Returns (positions, depths, time_cap_hits).
 fn sim_game_for_data(
     engine: &mut UgiEngine,
     starting_board: BoardState,
@@ -517,7 +515,7 @@ fn sim_game_for_data(
     randomize_schedule: &[u32],
     node_schedule: &[u64],
     debug: bool,
-) -> (Vec<(BoardState, f64)>, Vec<f64>) {
+) -> (Vec<(BoardState, f64)>, Vec<f64>, usize) {
     let mut board = starting_board;
     if !p1_goes_first {
         board.flip();
@@ -525,6 +523,7 @@ fn sim_game_for_data(
 
     let mut recorded: Vec<(BoardState, f64)> = vec![];
     let mut depths: Vec<f64> = vec![];
+    let mut time_cap_hits = 0usize;
     let mut move_history: Vec<Vec<usize>> = vec![];
     let mut turn = 0usize;
 
@@ -543,6 +542,11 @@ fn sim_game_for_data(
 
         let mv_data = get_move(engine, board, player_sign, ply, time_secs, randomize, nodes, debug);
 
+        // Track time cap hits (within 95% of the time limit)
+        if mv_data.2 >= (time_secs as f64 * 0.95) {
+            time_cap_hits += 1;
+        }
+
         // Only record depth for non-trivial positions (no forced win/loss found)
         if mv_data.1.abs() < 100000.0 {
             depths.push(mv_data.3);
@@ -551,11 +555,11 @@ fn sim_game_for_data(
         // Null move from engine = draw
         let mv = match mv_data.0 {
             Some(m) => m,
-            None => return (recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(), depths),
+            None => return (recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(), depths, time_cap_hits),
         };
 
         if move_history.iter().filter(|m| **m == mv).count() > 1 {
-            return (recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(), depths);
+            return (recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(), depths, time_cap_hits);
         }
 
         board.make_move(mv.clone());
@@ -576,7 +580,7 @@ fn sim_game_for_data(
 
         if *mv.last().unwrap() == 37 {
             let winner = if current_player == 0 { 1.0 } else { -1.0 };
-            return (recorded.into_iter().map(|(b, ps)| (b, winner * ps)).collect(), depths);
+            return (recorded.into_iter().map(|(b, ps)| (b, winner * ps)).collect(), depths, time_cap_hits);
         }
 
         board.flip();
@@ -619,6 +623,7 @@ fn data_gen_worker(
     let mut total_moves = 0usize;
     let mut total_positions = 0usize;
     let mut unique_boards: HashSet<[usize; 38]> = HashSet::new();
+    let mut total_time_caps = 0usize;
     // Depth buckets: moves 1-5, 6-10, 11+
     let mut depth_buckets: [(f64, usize); 3] = [(0.0, 0); 3];  // (sum, count)
 
@@ -627,12 +632,17 @@ fn data_gen_worker(
 
         let board = gen_board();
 
-        let (positions, game_depths) = sim_game_for_data(
+        let (positions, game_depths, game_time_caps) = sim_game_for_data(
             &mut engine,
             board, p1_goes_first,
             &depth_schedule, &time_schedule, &randomize_schedule, &node_schedule,
             debug,
         );
+
+        total_time_caps += game_time_caps;
+        if game_time_caps > 0 {
+            println!("[w{}] game {} — hit time cap {} time(s)", worker_id, game + 1, game_time_caps);
+        }
 
         let first_score = positions.first().map(|(_, s)| *s).unwrap_or(0.0);
         let winner = if p1_goes_first { first_score } else { -first_score };
@@ -665,10 +675,10 @@ fn data_gen_worker(
                 if depth_buckets[b].1 > 0 { depth_buckets[b].0 / depth_buckets[b].1 as f64 } else { 0.0 }
             };
             let unique_pct = if total_positions > 0 { unique_boards.len() as f64 / total_positions as f64 * 100.0 } else { 0.0 };
-            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | unique: {}/{} ({:.1}%) ---",
+            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | unique: {}/{} ({:.1}%) | time caps: {} ---",
                 worker_id, game + 1, game_count, games_written, p1_wins, p2_wins, draws, avg_moves,
                 bucket_avg(0), bucket_avg(1), bucket_avg(2),
-                unique_boards.len(), total_positions, unique_pct);
+                unique_boards.len(), total_positions, unique_pct, total_time_caps);
         }
     }
 
