@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::thread;
@@ -136,11 +137,14 @@ pub struct EngineAnalyzer {
     time_schedule: Vec<u32>,
     /// Randomize value per move number (0-indexed). Last entry applies to all subsequent moves.
     randomize_schedule: Vec<u32>,
+    /// Max node count per move number (0-indexed). Last entry applies to all subsequent moves.
+    /// 0 means no node limit.
+    node_schedule: Vec<u64>,
     /// When true, prints per-move board states and raw engine I/O.
     pub debug: bool,
 }
 impl EngineAnalyzer {
-    pub fn new(engine_1_config: EngineConfig, engine_2_config: EngineConfig, depth_schedule: Vec<u32>, time_schedule: Vec<u32>, randomize_schedule: Vec<u32>, debug: bool) -> EngineAnalyzer {
+    pub fn new(engine_1_config: EngineConfig, engine_2_config: EngineConfig, depth_schedule: Vec<u32>, time_schedule: Vec<u32>, randomize_schedule: Vec<u32>, node_schedule: Vec<u64>, debug: bool) -> EngineAnalyzer {
         let mut engine_1 = UgiEngine::new(engine_1_config.path.as_str());
         let mut engine_2 = UgiEngine::new(engine_2_config.path.as_str());
 
@@ -163,6 +167,7 @@ impl EngineAnalyzer {
             depth_schedule,
             time_schedule,
             randomize_schedule,
+            node_schedule,
             debug,
         }
 
@@ -181,6 +186,11 @@ impl EngineAnalyzer {
     fn randomize_for_move(&self, move_num: usize) -> u32 {
         let idx = move_num.min(self.randomize_schedule.len() - 1);
         self.randomize_schedule[idx]
+    }
+
+    fn nodes_for_move(&self, move_num: usize) -> u64 {
+        let idx = move_num.min(self.node_schedule.len() - 1);
+        self.node_schedule[idx]
     }
 
     /// Runs `set_count` sets of 4 games each (2 starting players x 2 board orientations).
@@ -318,14 +328,15 @@ impl EngineAnalyzer {
                 let ply = self.ply_for_move(move_num);
                 let time_secs = self.time_for_move(move_num);
                 let randomize = self.randomize_for_move(move_num);
+                let nodes = self.nodes_for_move(move_num);
                 let player_sign = if is_e1 { 1.0 } else { -1.0 };
                 let name = if is_e1 { &e1_name } else { &e2_name };
 
                 let t = Instant::now();
                 let mv_data = if is_e1 {
-                    get_move(&mut self.engine_1, board.clone(), player_sign, ply, time_secs, randomize, self.debug)
+                    get_move(&mut self.engine_1, board.clone(), player_sign, ply, time_secs, randomize, nodes, self.debug)
                 } else {
-                    get_move(&mut self.engine_2, board.clone(), player_sign, ply, time_secs, randomize, self.debug)
+                    get_move(&mut self.engine_2, board.clone(), player_sign, ply, time_secs, randomize, nodes, self.debug)
                 };
                 let elapsed = t.elapsed().as_millis();
 
@@ -396,7 +407,7 @@ impl EngineAnalyzer {
             println!("[data gen] game {}/{} ({})", game + 1, game_count, if p1_goes_first { "P1 first" } else { "P2 first" });
             let board = gen_board();
 
-            let positions = self.data_sim_game(board, p1_goes_first);
+            let (positions, _depths) = self.data_sim_game(board, p1_goes_first);
 
             // First position's score is from the first mover's perspective;
             // convert back to absolute (P1 positive) for stats.
@@ -436,31 +447,30 @@ impl EngineAnalyzer {
     /// Simulates one game with engine_1 as Player One and engine_2 as Player Two.
     /// Player One always goes first; the starting board is never flipped.
     ///
-    /// Returns a Vec of `(board, score)` — one entry per half-move. `board` is from
-    /// the perspective of the player to move. `score` is from that player's perspective.
-    fn data_sim_game(&mut self, starting_board: BoardState, p1_goes_first: bool) -> Vec<(BoardState, f64)> {
+    /// Returns a Vec of `(board, score)` — one entry per half-move, plus depths.
+    fn data_sim_game(&mut self, starting_board: BoardState, p1_goes_first: bool) -> (Vec<(BoardState, f64)>, Vec<f64>) {
         sim_game_for_data(
-            &mut self.engine_1, &mut self.engine_2,
+            &mut self.engine_1,
             starting_board, p1_goes_first,
-            &self.depth_schedule, &self.time_schedule, &self.randomize_schedule,
+            &self.depth_schedule, &self.time_schedule, &self.randomize_schedule, &self.node_schedule,
             self.debug,
         )
     }
 
     /// Spawns `thread_count` parallel workers, each playing `games_per_worker` games.
-    /// Each worker spawns its own engine pair and writes to `training_data_{id}.csv`.
+    /// Each worker spawns its own engine and writes to `training_data_{id}.csv`.
     pub fn generate_data_parallel(&self, games_per_worker: usize, thread_count: usize) {
         let handles: Vec<_> = (0..thread_count).map(|worker_id| {
             let worker_games = games_per_worker;
-            let e1_path = self.engine_1_path.clone();
-            let e2_path = self.engine_2_path.clone();
+            let engine_path = self.engine_1_path.clone();
             let depth_sched = self.depth_schedule.clone();
             let time_sched = self.time_schedule.clone();
             let rand_sched = self.randomize_schedule.clone();
+            let node_sched = self.node_schedule.clone();
             let debug = self.debug;
 
             thread::spawn(move || {
-                data_gen_worker(worker_id, worker_games, e1_path, e2_path, depth_sched, time_sched, rand_sched, debug);
+                data_gen_worker(worker_id, worker_games, engine_path, depth_sched, time_sched, rand_sched, node_sched, debug);
             })
         }).collect();
 
@@ -477,6 +487,13 @@ impl EngineAnalyzer {
         );
     }
 
+    /// Kill the engines spawned by new() without full quit handshake.
+    /// Use before generate_data_parallel which spawns its own engines.
+    pub fn kill_engines(&mut self) {
+        self.engine_1.kill();
+        self.engine_2.kill();
+    }
+
     pub fn quit(&mut self) {
         self.engine_1.quit();
         self.engine_2.quit();
@@ -488,25 +505,26 @@ impl EngineAnalyzer {
 /// Standalone game simulation for training data. Used by both single-threaded
 /// `generate_data` and parallel `data_gen_worker`.
 ///
-/// Returns a Vec of `(board, score)` — one entry per half-move. `board` is from
-/// the perspective of the player to move. `score` is from that player's perspective:
-/// +1 if they won, -1 if they lost, 0 for a draw.
+/// Returns a Vec of `(board, score)` — one entry per half-move, plus a Vec of
+/// depths reached per move. `board` is from the perspective of the player to move.
+/// `score` is from that player's perspective: +1 if they won, -1 if they lost, 0 for a draw.
 fn sim_game_for_data(
-    engine_1: &mut UgiEngine,
-    engine_2: &mut UgiEngine,
+    engine: &mut UgiEngine,
     starting_board: BoardState,
     p1_goes_first: bool,
     depth_schedule: &[u32],
     time_schedule: &[u32],
     randomize_schedule: &[u32],
+    node_schedule: &[u64],
     debug: bool,
-) -> Vec<(BoardState, f64)> {
+) -> (Vec<(BoardState, f64)>, Vec<f64>) {
     let mut board = starting_board;
     if !p1_goes_first {
         board.flip();
     }
 
     let mut recorded: Vec<(BoardState, f64)> = vec![];
+    let mut depths: Vec<f64> = vec![];
     let mut move_history: Vec<Vec<usize>> = vec![];
     let mut turn = 0usize;
 
@@ -521,21 +539,23 @@ fn sim_game_for_data(
         let ply = depth_schedule[move_num.min(depth_schedule.len() - 1)];
         let time_secs = time_schedule[move_num.min(time_schedule.len() - 1)];
         let randomize = randomize_schedule[move_num.min(randomize_schedule.len() - 1)];
+        let nodes = node_schedule[move_num.min(node_schedule.len() - 1)];
 
-        let mv_data = if current_player == 0 {
-            get_move(engine_1, board, player_sign, ply, time_secs, randomize, debug)
-        } else {
-            get_move(engine_2, board, player_sign, ply, time_secs, randomize, debug)
-        };
+        let mv_data = get_move(engine, board, player_sign, ply, time_secs, randomize, nodes, debug);
+
+        // Only record depth for non-trivial positions (no forced win/loss found)
+        if mv_data.1.abs() < 100000.0 {
+            depths.push(mv_data.3);
+        }
 
         // Null move from engine = draw
         let mv = match mv_data.0 {
             Some(m) => m,
-            None => return recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(),
+            None => return (recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(), depths),
         };
 
         if move_history.iter().filter(|m| **m == mv).count() > 1 {
-            return recorded.into_iter().map(|(b, _)| (b, 0.0)).collect();
+            return (recorded.into_iter().map(|(b, _)| (b, 0.0)).collect(), depths);
         }
 
         board.make_move(mv.clone());
@@ -556,7 +576,7 @@ fn sim_game_for_data(
 
         if *mv.last().unwrap() == 37 {
             let winner = if current_player == 0 { 1.0 } else { -1.0 };
-            return recorded.into_iter().map(|(b, ps)| (b, winner * ps)).collect();
+            return (recorded.into_iter().map(|(b, ps)| (b, winner * ps)).collect(), depths);
         }
 
         board.flip();
@@ -569,22 +589,18 @@ fn sim_game_for_data(
 fn data_gen_worker(
     worker_id: usize,
     game_count: usize,
-    e1_path: String,
-    e2_path: String,
+    engine_path: String,
     depth_schedule: Vec<u32>,
     time_schedule: Vec<u32>,
     randomize_schedule: Vec<u32>,
+    node_schedule: Vec<u64>,
     debug: bool,
 ) {
-    let mut engine_1 = UgiEngine::new(&e1_path);
-    let mut engine_2 = UgiEngine::new(&e2_path);
+    let mut engine = UgiEngine::new(&engine_path);
 
-    engine_1.send("ugi");
-    engine_1.send("isready");
-    engine_2.send("ugi");
-    engine_2.send("isready");
-    wait_for_readyok(&mut engine_1, 10_000);
-    wait_for_readyok(&mut engine_2, 10_000);
+    engine.send("ugi");
+    engine.send("isready");
+    wait_for_readyok(&mut engine, 10_000);
 
     let path = format!("training_data_{}.csv", worker_id);
 
@@ -600,16 +616,21 @@ fn data_gen_worker(
     let mut draws = 0usize;
     let mut p1_wins = 0usize;
     let mut p2_wins = 0usize;
+    let mut total_moves = 0usize;
+    let mut total_positions = 0usize;
+    let mut unique_boards: HashSet<[usize; 38]> = HashSet::new();
+    // Depth buckets: moves 1-5, 6-10, 11+
+    let mut depth_buckets: [(f64, usize); 3] = [(0.0, 0); 3];  // (sum, count)
 
     for game in 0..game_count {
         let p1_goes_first = game % 2 == 0;
 
         let board = gen_board();
 
-        let positions = sim_game_for_data(
-            &mut engine_1, &mut engine_2,
+        let (positions, game_depths) = sim_game_for_data(
+            &mut engine,
             board, p1_goes_first,
-            &depth_schedule, &time_schedule, &randomize_schedule,
+            &depth_schedule, &time_schedule, &randomize_schedule, &node_schedule,
             debug,
         );
 
@@ -621,7 +642,10 @@ fn data_gen_worker(
         } else {
             let outcome = if winner > 0.0 { p1_wins += 1; "P1 win" } else { p2_wins += 1; "P2 win" };
             println!("[w{}] game {} — {} ({} moves)", worker_id, game + 1, outcome, positions.len());
+            total_moves += positions.len();
             for (board_state, score) in &positions {
+                unique_boards.insert(board_state.data);
+                total_positions += 1;
                 let row = encode_csv_row(board_state, *score);
                 writer.write_all(row.as_bytes()).unwrap();
             }
@@ -629,14 +653,26 @@ fn data_gen_worker(
             games_written += 1;
         }
 
+        for (i, d) in game_depths.iter().enumerate() {
+            let bucket = if i < 5 { 0 } else if i < 10 { 1 } else { 2 };
+            depth_buckets[bucket].0 += d;
+            depth_buckets[bucket].1 += 1;
+        }
+
         if (game + 1) % 10 == 0 {
-            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} ---",
-                worker_id, game + 1, game_count, games_written, p1_wins, p2_wins, draws);
+            let avg_moves = if games_written > 0 { total_moves as f64 / games_written as f64 } else { 0.0 };
+            let bucket_avg = |b: usize| -> f64 {
+                if depth_buckets[b].1 > 0 { depth_buckets[b].0 / depth_buckets[b].1 as f64 } else { 0.0 }
+            };
+            let unique_pct = if total_positions > 0 { unique_boards.len() as f64 / total_positions as f64 * 100.0 } else { 0.0 };
+            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | unique: {}/{} ({:.1}%) ---",
+                worker_id, game + 1, game_count, games_written, p1_wins, p2_wins, draws, avg_moves,
+                bucket_avg(0), bucket_avg(1), bucket_avg(2),
+                unique_boards.len(), total_positions, unique_pct);
         }
     }
 
-    engine_1.send("quit");
-    engine_2.send("quit");
+    engine.send("quit");
 
     println!(
         "[w{}] done — {} games written → {}",
@@ -678,7 +714,7 @@ fn avg_ms(times: &[u128]) -> f64 {
 /// Returns `(move, score, time_secs, final_depth)` where `final_depth` is the
 /// deepest ply completed before the engine returned `bestmove`.
 /// A `None` move means the engine returned `bestmove null` (draw).
-pub fn get_move(engine: &mut UgiEngine, board: BoardState, player: f64, ply: u32, time_secs: u32, randomize: u32, debug: bool) -> (Option<Vec<usize>>, f64, f64, f64) {
+pub fn get_move(engine: &mut UgiEngine, board: BoardState, player: f64, ply: u32, time_secs: u32, randomize: u32, nodes: u64, debug: bool) -> (Option<Vec<usize>>, f64, f64, f64) {
     let mut s: String = String::new();
     for i in 0..38 {
         s.push_str(&board.data[i].to_string());
@@ -690,6 +726,7 @@ pub fn get_move(engine: &mut UgiEngine, board: BoardState, player: f64, ply: u32
     engine.send(format!("setoption maxPly {}", ply).as_str());
     engine.send(format!("setoption maxTime {}", time_secs).as_str());
     engine.send(format!("setoption randomize {}", randomize).as_str());
+    engine.send(format!("setoption maxNodes {}", nodes).as_str());
     engine.send("go");
 
     let mut final_depth = 0u32;
