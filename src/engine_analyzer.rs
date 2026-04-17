@@ -129,6 +129,8 @@ pub struct EngineAnalyzer {
     engine_2_name: String,
     engine_1_path: String,
     engine_2_path: String,
+    engine_1_init: Vec<String>,
+    engine_2_init: Vec<String>,
     /// Ply depth per move number (0-indexed). Last entry applies to all subsequent moves.
     /// e.g. vec![3, 3, 5] => moves 1 & 2 use ply 3, move 3+ uses ply 5.
     depth_schedule: Vec<u32>,
@@ -149,9 +151,15 @@ impl EngineAnalyzer {
         let mut engine_2 = UgiEngine::new(engine_2_config.path.as_str());
 
         engine_1.send("ugi");
+        for cmd in &engine_1_config.init_commands {
+            engine_1.send(cmd);
+        }
         engine_1.send("isready");
 
         engine_2.send("ugi");
+        for cmd in &engine_2_config.init_commands {
+            engine_2.send(cmd);
+        }
         engine_2.send("isready");
 
         wait_for_readyok(&mut engine_1, 10_000);
@@ -164,6 +172,8 @@ impl EngineAnalyzer {
             engine_2_name: engine_2_config.name,
             engine_1_path: engine_1_config.path,
             engine_2_path: engine_2_config.path,
+            engine_1_init: engine_1_config.init_commands,
+            engine_2_init: engine_2_config.init_commands,
             depth_schedule,
             time_schedule,
             randomize_schedule,
@@ -405,7 +415,7 @@ impl EngineAnalyzer {
         for game in 0..game_count {
             let p1_goes_first = game % 2 == 0;
             println!("[data gen] game {}/{} ({})", game + 1, game_count, if p1_goes_first { "P1 first" } else { "P2 first" });
-            let board = gen_board();
+            let board = gen_board_independent();
 
             let (positions, _depths, _time_caps) = self.data_sim_game(board, p1_goes_first);
 
@@ -463,6 +473,7 @@ impl EngineAnalyzer {
         let handles: Vec<_> = (0..thread_count).map(|worker_id| {
             let worker_games = games_per_worker;
             let engine_path = self.engine_1_path.clone();
+            let engine_init = self.engine_1_init.clone();
             let depth_sched = self.depth_schedule.clone();
             let time_sched = self.time_schedule.clone();
             let rand_sched = self.randomize_schedule.clone();
@@ -470,7 +481,7 @@ impl EngineAnalyzer {
             let debug = self.debug;
 
             thread::spawn(move || {
-                data_gen_worker(worker_id, worker_games, engine_path, depth_sched, time_sched, rand_sched, node_sched, debug);
+                data_gen_worker(worker_id, worker_games, engine_path, engine_init, depth_sched, time_sched, rand_sched, node_sched, debug);
             })
         }).collect();
 
@@ -594,6 +605,7 @@ fn data_gen_worker(
     worker_id: usize,
     game_count: usize,
     engine_path: String,
+    engine_init: Vec<String>,
     depth_schedule: Vec<u32>,
     time_schedule: Vec<u32>,
     randomize_schedule: Vec<u32>,
@@ -603,6 +615,9 @@ fn data_gen_worker(
     let mut engine = UgiEngine::new(&engine_path);
 
     engine.send("ugi");
+    for cmd in &engine_init {
+        engine.send(cmd);
+    }
     engine.send("isready");
     wait_for_readyok(&mut engine, 10_000);
 
@@ -630,7 +645,7 @@ fn data_gen_worker(
     for game in 0..game_count {
         let p1_goes_first = game % 2 == 0;
 
-        let board = gen_board();
+        let board = gen_board_independent();
 
         let (positions, game_depths, game_time_caps) = sim_game_for_data(
             &mut engine,
@@ -792,6 +807,26 @@ fn wait_for_readyok(engine: &mut UgiEngine, timeout_ms: u64) {
         }
     }
     eprintln!("[data gen] warning: engine did not send readyok within {}ms", timeout_ms);
+}
+
+pub fn gen_board_independent() -> BoardState {
+    let mut p1_pieces: Vec<usize> = vec![3, 3, 2, 2, 1, 1];
+    let mut p2_pieces: Vec<usize> = vec![3, 3, 2, 2, 1, 1];
+
+    let mut board = BoardState::new();
+    let mut rng = rand::thread_rng();
+
+    for i in 0..6 {
+        let p1_piece = p1_pieces.remove(rng.gen_range(0..p1_pieces.len()));
+        board.data[i] = p1_piece;
+    }
+
+    for i in 0..6 {
+        let p2_piece = p2_pieces.remove(rng.gen_range(0..p2_pieces.len()));
+        board.data[30 + i] = p2_piece;
+    }
+
+    board
 }
 
 pub fn gen_board() -> BoardState {

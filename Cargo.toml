@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 rand = "0.8.5"
-# gyges = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges" }
-# gyges_engine = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges_engine" }
+gyges = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges" }
+gyges_engine = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges_engine" }
