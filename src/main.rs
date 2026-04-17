@@ -17,10 +17,10 @@ fn main() {
     // Analysis
     run_analysis();
 
-    // // ========== DATA CONVERSION ==========
-    // for i in 0..24 {
-    //     let input = format!("training_data_{}.csv", i);
-    //     let output = format!("out/converted_{}.csv", i);
+    // ========== DATA CONVERSION ==========
+    // for i in 0..1 {
+    //     let input = format!("training\\data\\hce_100kn.csv");
+    //     let output = format!("training\\data\\hce_100kn_converted.csv");
     //     println!("Converting file {} of 24: {} -> {}", i + 1, input, output);
     //     convert_dataset(&input, &output);
     // }
@@ -87,7 +87,7 @@ fn run_analysis() {
         path: String::from("./engines/gyges"),
         init_commands: vec![
             String::from("setoption nn true"),
-            String::from("setoption weightsPath weights\\hce_p3r2_1s_161k_weights.bin"),
+            String::from("setoption weightsPath engines\\weights\\hce_p3r2_1s_161k_weights.bin"),
         ],
     };
 

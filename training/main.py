@@ -1,6 +1,5 @@
 import os
-import glob
-import copy
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -12,12 +11,11 @@ from sklearn.model_selection import train_test_split
 SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR    = os.path.join(SCRIPT_DIR, "data")
 WEIGHTS_DIR = os.path.join(SCRIPT_DIR, "weights")
-OUTPUT_NAME = "final_weights.bin"
+OUTPUT_PREFIX = "final_weights"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
-
 
 class GygesNet(nn.Module):
     def __init__(self):
@@ -70,8 +68,30 @@ def mirror_board(data):
     return mirrored
 
 
+def print_stats(tag, data_arr, outcomes_arr):
+    n = len(outcomes_arr)
+    wins   = int((outcomes_arr > 0).sum())
+    losses = int((outcomes_arr < 0).sum())
+    unique = len(np.unique(data_arr, axis=0))
+    dupes  = n - unique
+
+    print(f"\n{'─' * 50}")
+    print(f"  {tag}")
+    print(f"{'─' * 50}")
+    print(f"  Total positions:  {n:,}")
+    print(f"  Unique boards:    {unique:,} ({100 * unique / n:.1f}%)")
+    print(f"  Duplicates:       {dupes:,} ({100 * dupes / n:.1f}%)")
+    print(f"  Wins: {wins:,} ({100 * wins / n:.1f}%)  |  Losses: {losses:,} ({100 * losses / n:.1f}%)")
+
+
+def save_weights(model, path):
+    with open(path, "wb") as f:
+        for _, param in model.named_parameters():
+            f.write(param.detach().cpu().numpy().astype(np.float32).tobytes())
+
+
 if __name__ == '__main__':
-    files = [os.path.join(DATA_DIR, f"converted_{i}.csv") for i in range(24)]
+    files = [os.path.join(DATA_DIR, "hce_100kn_converted.csv")]
 
     df = pd.concat([pd.read_csv(f, header=None) for f in files], ignore_index=True)
     print(f"Loaded {len(df)} rows from {len(files)} files")
@@ -81,22 +101,6 @@ if __name__ == '__main__':
 
     outcomes = df.iloc[:, 72].values.astype(np.float32)
     outcomes = outcomes * 0.75
-
-    # ── Dataset diagnostics ──────────────────────────────────────────────
-    def print_stats(tag, data_arr, outcomes_arr):
-        n = len(outcomes_arr)
-        wins   = int((outcomes_arr > 0).sum())
-        losses = int((outcomes_arr < 0).sum())
-        unique = len(np.unique(data_arr, axis=0))
-        dupes  = n - unique
-
-        print(f"\n{'─' * 50}")
-        print(f"  {tag}")
-        print(f"{'─' * 50}")
-        print(f"  Total positions:  {n:,}")
-        print(f"  Unique boards:    {unique:,} ({100 * unique / n:.1f}%)")
-        print(f"  Duplicates:       {dupes:,} ({100 * dupes / n:.1f}%)")
-        print(f"  Wins: {wins:,} ({100 * wins / n:.1f}%)  |  Losses: {losses:,} ({100 * losses / n:.1f}%)")
 
     print_stats("Raw dataset", data, outcomes)
 
@@ -123,10 +127,11 @@ if __name__ == '__main__':
     optimizer  = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn    = nn.MSELoss()
 
-    epochs = 50
-    best_val = float('inf')
-    best_state = None
-    best_epoch = 0
+    epochs = 200
+
+    run_dir = os.path.join(WEIGHTS_DIR, f"{OUTPUT_PREFIX}_{datetime.now():%Y%m%d_%H%M%S}")
+    os.makedirs(run_dir, exist_ok=True)
+    print(f"Run: {run_dir}")
 
     for epoch in range(epochs):
         model.train()
@@ -146,26 +151,12 @@ if __name__ == '__main__':
                 val_loss += loss_fn(model(X), y).item()
 
         avg_val = val_loss / len(val_loader)
-        if avg_val < best_val:
-            best_val = avg_val
-            best_state = copy.deepcopy(model.state_dict())
-            best_epoch = epoch + 1
 
         if (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch + 1:>3}/{epochs} | "
                   f"train: {train_loss / len(train_loader):.4f} | "
                   f"val: {avg_val:.4f}")
 
-    print(f"\nBest val loss {best_val:.4f} at epoch {best_epoch}")
-    model.load_state_dict(best_state)
-    model.eval()
-
-    os.makedirs(WEIGHTS_DIR, exist_ok=True)
-    out_path = os.path.join(WEIGHTS_DIR, OUTPUT_NAME)
-    with open(out_path, "wb") as f:
-        for name, param in model.named_parameters():
-            data_out = param.detach().cpu().numpy().astype(np.float32)
-            f.write(data_out.tobytes())
-            print(f"{name}: shape={data_out.shape}")
-
-    print(f"Saved {out_path}")
+            out_path = os.path.join(run_dir, f"e{epoch + 1}.bin")
+            save_weights(model, out_path)
+            print(f"  Saved {out_path}")

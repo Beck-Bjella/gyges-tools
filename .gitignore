@@ -2,14 +2,19 @@
 *.csv
 DATASET BACKUP/
 DATASET_BACKUP/
-training_data/
 src/*.exe
 engines/*
 !engines/.gitkeep
-weights/*
-!weights/.gitkeep
+!engines/weights/
+engines/weights/*
+!engines/weights/.gitkeep
+training/weights/*
+!training/weights/.gitkeep
+training/data/*
+!training/data/.gitkeep
 NOTES.md
 TODO.md
+.vscode/
 
 # Python
 __pycache__/
