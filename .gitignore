@@ -12,6 +12,8 @@ training/weights/*
 !training/weights/.gitkeep
 training/data/*
 !training/data/.gitkeep
+training/policy_weights/*
+training/policy_heatmaps.png
 NOTES.md
 TODO.md
 .vscode/
