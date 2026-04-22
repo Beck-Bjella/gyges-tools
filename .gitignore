@@ -12,7 +12,6 @@ training/weights/*
 !training/weights/.gitkeep
 training/data/*
 !training/data/.gitkeep
-NOTES.md
 TODO.md
 .vscode/
 

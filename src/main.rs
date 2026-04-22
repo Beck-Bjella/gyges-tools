@@ -77,29 +77,58 @@ fn main() {
 /// Runs engine vs engine analysis for testing/comparison.
 #[allow(dead_code)]
 fn run_analysis() {
-    let engine_1 = EngineConfig {
+    let hce = EngineConfig {
         name: String::from("HCE"),
-        path: String::from("./engines/gyges"),
+        path: String::from("./engines/gyges_144x256"),
         init_commands: vec![String::from("setoption nn false")],
     };
-    let engine_2 = EngineConfig {
-        name: String::from("NN"),
-        path: String::from("./engines/gyges"),
+    let nn_144x64 = EngineConfig {
+        name: String::from("NN 64"),
+        path: String::from("./engines/gyges_144x64"),
         init_commands: vec![
             String::from("setoption nn true"),
-            String::from("setoption weightsPath engines\\weights\\hce_p3r2_1s_161k_weights.bin"),
+            String::from("setoption nnAcc off"),
+            String::from("setoption weightsPath engines\\weights\\e100_144x64.bin"),
         ],
     };
+    let nn_144x128 = EngineConfig {
+        name: String::from("NN 128"),
+        path: String::from("./engines/gyges_144x128"),
+        init_commands: vec![
+            String::from("setoption nn true"),
+            String::from("setoption nnAcc off"),
+            String::from("setoption weightsPath engines\\weights\\e100_144x128.bin"),
+        ],
+    };
+    let nn_144x256 = EngineConfig {
+        name: String::from("NN 256"),
+        path: String::from("./engines/gyges_144x256"),
+        init_commands: vec![
+            String::from("setoption nn true"),
+            String::from("setoption nnAcc off"),
+            String::from("setoption weightsPath engines\\weights\\e100_144x256.bin"),
+        ],
+    };
+    let nn_144x512 = EngineConfig {
+        name: String::from("NN 512"),
+        path: String::from("./engines/gyges_144x512"),
+        init_commands: vec![
+            String::from("setoption nn true"),
+            String::from("setoption nnAcc off"),
+            String::from("setoption weightsPath engines\\weights\\e60_144x512.bin"),
+        ],
+    };
+    
 
     let debug = true;
     let depth_schedule = vec![30]; // NO DEPTH LIMIT 
-    let time_schedule = vec![2]; // 4 min max
+    let time_schedule = vec![240]; // 4 min max
     let randomize_schedule = vec![0]; // NO RANDOMIZATION
-    let node_schedule = vec![100_000_000 ]; // NO NODE LIMIT
+    let node_schedule = vec![100_000]; // NO NODE LIMIT
 
     let mut analyser = EngineAnalyzer::new(
-        engine_1,
-        engine_2,
+        hce,
+        nn_144x256,
         depth_schedule,
         time_schedule,
         randomize_schedule,
