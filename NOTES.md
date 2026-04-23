@@ -17,7 +17,7 @@ The NN's might be really strong in endgames assuming they dont throw the early g
 ## Datasets
 | Name | Positions (raw/mirrored) | Starting Lines | Node Limit | Notes |
 |------|--------------------------|---------------|------------|-------|
-| 100n | 757k / 1.4M | Mirrored | 100k | AWS + local overnight run |
+| 100n | 757k / 1.4M | Symmetric (gen_board) — back rank == reverse of front rank | 100k | AWS + local overnight run. Confirmed via inspection 2026-04-23: every starting position satisfies `back[i] == front[5-i]`. Code switched to `gen_board_independent` in commit ff89070 (2026-04-17 12:56), but this dataset was generated on prior code. |
 
 ## Trained Models
 | Name | Architecture | Epochs | Dataset | Val Loss |
@@ -26,4 +26,6 @@ The NN's might be really strong in endgames assuming they dont throw the early g
 | nnue_h128 (20260421_203630) | 144->128->1 | 100 | 100n (1.67M w/ mirror) | 0.3691 (train 0.3704) |
 | nnue_h256 (20260421_202315) | 144->256->1 | 100 | 100n (1.67M w/ mirror) | 0.3613 (train 0.3509) |
 | nnue_h512 (20260421_203023) | 144->512->1 | 100 | 100n (1.67M w/ mirror) | 0.3590 (train 0.3280) — best val 0.3574 @ e60 |
+| nnue_h256x32 (20260422)     | 144->256->32->1 | 100 | 100n (1.67M w/ mirror) | 0.3546 best @ e50 |
 
+## Other

@@ -283,3 +283,51 @@ Ran the current shipping pick (h256, single-sided, outcome-trained) against HCE 
 
 ### Update — h256 vs HCE margin continues to grow
 Same match, further along: full-set result now **h256 13 – HCE 2, 18 tied sets**. The margin has widened monotonically as games have accumulated, not regressed to the mean — confirming the earlier 9–2 snapshot wasn't early-variance noise and the h256-over-HCE advantage is stable. Full-set win rate on decisive sets: 13 / 15 ≈ 87%.
+
+---
+
+## Deeper head — `144 → 256 → 32 → 1` (h256x32)
+
+**Why this experiment.** The width sweep saturated around H=256 on this dataset. Open question from the sweep's "next experiments" list: does the plateau move if instead of widening the accumulator, you add a non-trivial nonlinear head? The flat `144 → 256 → 1` is structurally close to a generalized linear model — every feature has to carry its weight in isolation, with no way to combine "piece A at sq X *together with* piece B at sq Y." Stacking a small `→32→1` ReLU stage gives the network a place to compose features. This is also the canonical chess-NNUE shape (wide accumulator + small dense tail), so it's the most natural architectural axis to vary next.
+
+**Setup.** Identical to the width sweep except for the architecture: `Linear(144,256) → ReLU → Dropout(0.1) → Linear(256,32) → ReLU → Linear(32,1) → Tanh`. Same dataset (`hce_100kn.csv`, 1.67M w/ mirror), same Adam lr=1e-3, MSE, batch 1024, 100 epochs, 80/20 split, random_state=42, checkpoints every 10 epochs.
+
+**Training result:** **best val 0.3546 @ e50** (vs 0.3613 @ e100 for flat h256 — ~2% lower val loss). Train kept descending past e50 while val drifted back up, same overfit signature as h512. Picked **e50 checkpoint** for matches following the same best-val-checkpoint rule used for h512 (e60). Export layout: `fc1.weight [256,144] + fc1.bias [256] + fc2.weight [32,256] + fc2.bias [32] + fc3.weight [1,32] + fc3.bias [1]` = 45,377 floats / 181,508 bytes.
+
+**Match — h256x32 (e50) vs h256 (e100), 100k nodes/move:**
+
+| stage | full sets (x32–256) | partial (x32–256) | tied | games (x32–256–D) | think-time avg | avg depth |
+|-------|--------------------|--------------------|------|---------------------|----------------|-----------|
+| early snapshot (42g)  | 7–4   | 2–0 | 8  | 24–16–2  | x32 1668ms, 256 1424ms | 4.22 vs 4.25 |
+| **final (298g)**      | **43–21** | 3–3 | 79 | **168–124–6** | x32 1611ms, 256 1389ms | 4.18 vs 4.16 |
+
+**Statistical read.** 56.4% raw on N=298 → 2σ band at this N is ±5.8%, so the result just clears statistical significance. Full-set ratio 43–21 = 2.05:1, or 67% of decisive sets — solidly significant at the set level. Tied sets are 53% (consistent with both engines being strong, edge being modest). The training-loss delta (~2%) and the play-strength delta line up almost exactly.
+
+**Inference cost.** x32 spends ~16% more time per move (1611 vs 1389 ms) for essentially the same depth (4.18 vs 4.16). The extra layer has real per-eval cost. Two implications:
+- In a *time-limited* match the edge would shrink — x32 would get fewer searched nodes per move.
+- A `256 → 16 → 1` (or `256 → 8 → 1`) tail might be net stronger overall: keeps the architectural-composition benefit while costing less per inference. Worth testing.
+
+**Takeaway.** Adding a small nonlinear head to the saturated h256 accumulator produced a real (modest) play-strength gain that matches its val-loss gain almost exactly. The plateau *did* move slightly with depth-in-head, not just width-in-accumulator — partial evidence that the H=256 saturation was at least partly structural (the flat head couldn't use further capacity productively), not purely data-noise-floor. But the move is small enough that the noise-floor explanation from the width sweep still holds for the bulk of the plateau.
+
+**Open from this entry:**
+- Smaller tail sizes (`256 → 16 → 1`, `256 → 8 → 1`) — likely the right next architectural axis.
+- Two-stage tail (`256 → 32 → 32 → 1`) — full canonical NNUE shape.
+- Time-controlled rematch (not just node-controlled) to measure the real-strength-vs-inference-cost tradeoff directly.
+- h256x32 vs HCE — open question whether the gain over flat h256 transfers proportionally to the HCE matchup, or compresses (NN-vs-HCE has narrower dynamic range, see measurement notes above).
+
+---
+
+## Note (2026-04-23) — existing 100n dataset is symmetric-starts, not independent
+
+While prepping a fresh data-collection run with `gen_board_independent()`, dug into when the swap from `gen_board()` happened. Found in `git log`: commit `ff89070` (2026-04-17 12:56) introduced `gen_board_independent` and swapped both data-gen call sites. The current `hce_100kn.csv` was modified Apr 17 at 14:20 — only 84 minutes later, and birth time matches modify time, suggesting the file was *transferred* (likely from AWS) rather than written-in-place. NOTES.md had said "Mirrored" for starting lines, ambiguously.
+
+Confirmed via direct inspection: ran a check on the first 500 and last 500 rows looking for "starting positions" (only back ranks occupied, middle empty). All 10 examples checked (drawn from head and tail) satisfy `back[i] == front[5-i]` exactly — i.e. perfect rotational mirrors. Independent generation would produce this with probability ~1/720 per position; ~30 in a row is statistical impossibility.
+
+Conclusion: the entire 833k dataset is from `gen_board()` (symmetric starts). Both AWS and local portions used pre-`ff89070` code. The val ceiling at 0.352 we've been hitting was on this restricted opening distribution.
+
+**Implications:**
+- Tonight's overnight run on `gen_board_independent` will produce a distributionally different dataset, not just a bigger one.
+- "More data" and "wider opening distribution" are now coupled — can't separate them with what we have.
+- For the paper, want to be clear: pair-encoding ceiling at 0.352 was measured on symmetric-only data.
+
+NOTES.md updated to reflect "Symmetric (gen_board)" with timestamp pointer back to here.
