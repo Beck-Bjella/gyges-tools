@@ -429,8 +429,8 @@ impl EngineAnalyzer {
             }
             total_moves += positions.len();
             if winner > 0.0 { p1_wins += 1; } else { p2_wins += 1; }
-            for (board_state, score) in &positions {
-                let row = encode_csv_row(board_state, *score);
+            for (move_num, (board_state, score)) in positions.iter().enumerate() {
+                let row = encode_csv_row(board_state, *score, move_num, game);
                 writer.write_all(row.as_bytes()).unwrap();
             }
             writer.flush().unwrap();
@@ -637,7 +637,6 @@ fn data_gen_worker(
     let mut p2_wins = 0usize;
     let mut total_moves = 0usize;
     let mut total_positions = 0usize;
-    let mut unique_boards: HashSet<[usize; 38]> = HashSet::new();
     let mut total_time_caps = 0usize;
     // Depth buckets: moves 1-5, 6-10, 11+
     let mut depth_buckets: [(f64, usize); 3] = [(0.0, 0); 3];  // (sum, count)
@@ -668,10 +667,10 @@ fn data_gen_worker(
             let outcome = if winner > 0.0 { p1_wins += 1; "P1 win" } else { p2_wins += 1; "P2 win" };
             println!("[w{}] game {} — {} ({} moves)", worker_id, game + 1, outcome, positions.len());
             total_moves += positions.len();
-            for (board_state, score) in &positions {
-                unique_boards.insert(board_state.data);
+            let game_id = worker_id * GAMES_PER_WORKER_MAX + game;
+            for (move_num, (board_state, score)) in positions.iter().enumerate() {
                 total_positions += 1;
-                let row = encode_csv_row(board_state, *score);
+                let row = encode_csv_row(board_state, *score, move_num, game_id);
                 writer.write_all(row.as_bytes()).unwrap();
             }
             writer.flush().unwrap();
@@ -689,11 +688,10 @@ fn data_gen_worker(
             let bucket_avg = |b: usize| -> f64 {
                 if depth_buckets[b].1 > 0 { depth_buckets[b].0 / depth_buckets[b].1 as f64 } else { 0.0 }
             };
-            let unique_pct = if total_positions > 0 { unique_boards.len() as f64 / total_positions as f64 * 100.0 } else { 0.0 };
-            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | unique: {}/{} ({:.1}%) | time caps: {} ---",
+            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | positions: {} | time caps: {} ---",
                 worker_id, game + 1, game_count, games_written, p1_wins, p2_wins, draws, avg_moves,
                 bucket_avg(0), bucket_avg(1), bucket_avg(2),
-                unique_boards.len(), total_positions, unique_pct, total_time_caps);
+                total_positions, total_time_caps);
         }
     }
 
@@ -705,21 +703,33 @@ fn data_gen_worker(
     );
 }
 
-/// Encodes one board position as a CSV row (no trailing newline is added by caller —
-/// this function includes the `\n`).
-/// Format: sq0,sq1,...,sq35,score\n
-fn encode_csv_row(board: &BoardState, score: f64) -> String {
-    let mut s = String::with_capacity(90);
+/// Encodes one board position as a CSV row.
+/// Format: sq0,sq1,...,sq35,score,move_num,game_id\n
+///
+/// `move_num` is the 0-indexed position within the game (0 = initial board,
+/// 1 = after the first move, ...). `game_id` should be globally unique across
+/// all workers — see GAMES_PER_WORKER_MAX for the parallel encoding scheme.
+fn encode_csv_row(board: &BoardState, score: f64, move_num: usize, game_id: usize) -> String {
+    let mut s = String::with_capacity(110);
     for i in 0..36 {
         s.push_str(&board.data[i].to_string());
         s.push(',');
     }
-    // Write score as integer: 1, -1, or 0
+    // Score as integer: 1, -1, or 0
     let score_int = if score > 0.0 { 1i32 } else if score < 0.0 { -1i32 } else { 0i32 };
     s.push_str(&score_int.to_string());
+    s.push(',');
+    s.push_str(&move_num.to_string());
+    s.push(',');
+    s.push_str(&game_id.to_string());
     s.push('\n');
     s
 }
+
+/// Multiplier used to derive globally-unique game IDs across parallel workers
+/// without any shared-counter contention. game_id = worker_id * MAX + local_game_idx.
+/// 10M per worker is well beyond any plausible run.
+const GAMES_PER_WORKER_MAX: usize = 10_000_000;
 
 fn print_board_from_starting_perspective(board: &BoardState, flip: bool) {
     if flip {

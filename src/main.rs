@@ -54,9 +54,9 @@ fn main() {
     // Setup
     let debug = false;
     let depth_schedule = vec![60]; // NO DEPTH LIMIT
-    let time_schedule = vec![240]; // 4 min max
+    let time_schedule = vec![5]; // 5 sec max
     let randomize_schedule = vec![1, 1, 0];
-    let node_schedule = vec![1000, 1000, 100_000]; // 100k node limit
+    let node_schedule = vec![0, 0, 5000]; // 10k node limit
 
     let mut engine_analyser = EngineAnalyzer::new(
         hce_baseline.clone(),
@@ -85,15 +85,6 @@ fn run_analysis() {
         path: String::from("./engines/gyges_144x256"),
         init_commands: vec![String::from("setoption nn false")],
     };
-    let nn_144x128 = EngineConfig {
-        name: String::from("NN 128"),
-        path: String::from("./engines/gyges_144x128"),
-        init_commands: vec![
-            String::from("setoption nn true"),
-            String::from("setoption nnAcc off"),
-            String::from("setoption weightsPath engines\\weights\\e100_144x128.bin"),
-        ],
-    };
     let nn_144x256 = EngineConfig {
         name: String::from("NN 256"),
         path: String::from("./engines/gyges_144x256"),
@@ -103,35 +94,36 @@ fn run_analysis() {
             String::from("setoption weightsPath engines\\weights\\e100_144x256.bin"),
         ],
     };
-    let nn_144x256x32 = EngineConfig {
-        name: String::from("NN 256x32"),
-        path: String::from("./engines/gyges_144x256x32"),
-        init_commands: vec![
-            String::from("setoption nn true"),
-            String::from("setoption nnAcc off"),
-            String::from("setoption weightsPath engines\\weights\\e50_144x256x32.bin"),
-        ],
-    };
-    let nn_large = EngineConfig {
-        name: String::from("NN LARGE"),
-        path: String::from("./engines/gyges_large"),
-        init_commands: vec![
-            String::from("setoption nn true"),
-            String::from("setoption nnAcc off"),
-            String::from("setoption weightsPath engines\\weights\\e10_large_new.bin"),
-        ],
-    };
+    // let nn_pair_833k = EngineConfig {
+    //     name: String::from("PAIR 833K"),
+    //     path: String::from("./engines/gyges_large"),
+    //     init_commands: vec![
+    //         String::from("setoption nn true"),
+    //         String::from("setoption nnAcc off"),
+    //         String::from("setoption weightsPath engines\\weights\\pair_h64_833k_e10.bin"),
+    //     ],
+    // };
+    // let nn_pair_combined = EngineConfig {
+    //     name: String::from("PAIR COMBINED"),
+    //     path: String::from("./engines/gyges_large"),
+    //     init_commands: vec![
+    //         String::from("setoption nn true"),
+    //         String::from("setoption nnAcc off"),
+    //         String::from("setoption weightsPath engines\\weights\\pair_h64_combined_e10.bin"),
+    //     ],
+    // };
+
 
 
     let debug = true;
     let depth_schedule = vec![30]; // NO DEPTH LIMIT 
     let time_schedule = vec![120]; // 4 min max
-    let randomize_schedule = vec![0]; // NO RANDOMIZATION
-    let node_schedule = vec![100_000]; // NO NODE LIMIT
+    let randomize_schedule = vec![1, 1, 0]; // NO RANDOMIZATION
+    let node_schedule = vec![0, 0, 5000]; // NO NODE LIMIT
 
     let mut analyser = EngineAnalyzer::new(
-        nn_144x256,
-        nn_large,
+        nn_144x256.clone(),
+        nn_144x256.clone(),
         depth_schedule,
         time_schedule,
         randomize_schedule,

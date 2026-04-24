@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from common import REPO_ROOT, WEIGHTS_DIR, device, load_and_split, save_weights
+from common import REPO_ROOT, WEIGHTS_DIR, Dataset, device, save_weights
 
 print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
@@ -106,8 +106,31 @@ def build_batch(indices_gpu, idx, out):
 
 
 if __name__ == '__main__':
-    files = [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
-    train_data, val_data, y_train, y_val = load_and_split(files)
+    # files = [os.path.join(REPO_ROOT, "training", "data", "hce_100kn.csv")]
+    # files = [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
+    files = (
+        [os.path.join(REPO_ROOT, "training", "data", "hce_100kn.csv")] +
+        [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
+    )
+    
+    # Optional pruning knobs — leave at 0 to disable
+    MIN_GAME_MOVES = 0   # drop games shorter than N positions (random-opening junk)
+    MIN_MOVE_NUM   = 0   # drop positions earlier than this within their game
+
+    ds = Dataset.from_files(files)
+    ds.stats("Raw")
+    if MIN_GAME_MOVES > 0:
+        ds = ds.filter_min_moves(MIN_GAME_MOVES)
+        ds.stats(f"After filter_min_moves({MIN_GAME_MOVES})")
+    if MIN_MOVE_NUM > 0:
+        ds = ds.filter_min_move_num(MIN_MOVE_NUM)
+        ds.stats(f"After filter_min_move_num({MIN_MOVE_NUM})")
+
+    train, val = ds.split(test_size=0.2)
+    train = train.mirror_augment()
+    train.stats("Train (after mirroring)")
+    val.stats("Val (no mirror)")
+    print()
 
     # Sparse encoding: each position becomes a list of active feature indices.
     # Pad to MAX_ACTIVE with FEATURE_COUNT (the "sink" index) so scatter is safe.
@@ -119,8 +142,10 @@ if __name__ == '__main__':
         return out
 
     print("Encoding positions...")
-    X_train = encode_all(train_data)
-    X_val   = encode_all(val_data)
+    X_train = encode_all(train.boards)
+    X_val   = encode_all(val.boards)
+    y_train = train.outcomes
+    y_val   = val.outcomes
     print(f"Train indices: {X_train.shape}  Val indices: {X_val.shape}")
 
     X_train_gpu = torch.tensor(X_train, dtype=torch.long,    device=device)
