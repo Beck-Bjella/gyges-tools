@@ -662,10 +662,8 @@ fn data_gen_worker(
         let winner = if p1_goes_first { first_score } else { -first_score };
         if winner == 0.0 {
             draws += 1;
-            println!("[w{}] game {} — draw ({} moves)", worker_id, game + 1, positions.len());
         } else {
-            let outcome = if winner > 0.0 { p1_wins += 1; "P1 win" } else { p2_wins += 1; "P2 win" };
-            println!("[w{}] game {} — {} ({} moves)", worker_id, game + 1, outcome, positions.len());
+            if winner > 0.0 { p1_wins += 1; } else { p2_wins += 1; }
             total_moves += positions.len();
             let game_id = worker_id * GAMES_PER_WORKER_MAX + game;
             for (move_num, (board_state, score)) in positions.iter().enumerate() {
@@ -673,7 +671,6 @@ fn data_gen_worker(
                 let row = encode_csv_row(board_state, *score, move_num, game_id);
                 writer.write_all(row.as_bytes()).unwrap();
             }
-            writer.flush().unwrap();
             games_written += 1;
         }
 
@@ -683,7 +680,9 @@ fn data_gen_worker(
             depth_buckets[bucket].1 += 1;
         }
 
-        if (game + 1) % 10 == 0 {
+        if (game + 1) % 50 == 0 {
+            // Flush only on summary boundaries — per-game flushing was unnecessary syscall overhead.
+            writer.flush().unwrap();
             let avg_moves = if games_written > 0 { total_moves as f64 / games_written as f64 } else { 0.0 };
             let bucket_avg = |b: usize| -> f64 {
                 if depth_buckets[b].1 > 0 { depth_buckets[b].0 / depth_buckets[b].1 as f64 } else { 0.0 }
@@ -767,7 +766,7 @@ pub fn get_move(engine: &mut UgiEngine, board: BoardState, player: f64, ply: u32
     let mut final_depth = 0u32;
 
     loop {
-        if let Some(r) = engine.recive() {
+        if let Some(r) = engine.recive_blocking() {
             if debug { println!("engine {}: {}", player, r); }
 
             let raw_cmds: Vec<&str> = r.split_whitespace().collect();
@@ -808,15 +807,18 @@ pub fn parse_move(raw_move: &str) -> Vec<usize> {
 
 /// Drains engine output until a `readyok` line is seen or `timeout_ms` elapses.
 fn wait_for_readyok(engine: &mut UgiEngine, timeout_ms: u64) {
-    let deadline = Instant::now();
-    while deadline.elapsed().as_millis() < timeout_ms as u128 {
-        if let Some(line) = engine.recive() {
-            if line.trim() == "readyok" {
-                return;
-            }
+    let deadline = Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            eprintln!("[data gen] warning: engine did not send readyok within {}ms", timeout_ms);
+            return;
+        }
+        match engine.recive_with_timeout(remaining) {
+            Some(line) if line.trim() == "readyok" => return,
+            _ => {}
         }
     }
-    eprintln!("[data gen] warning: engine did not send readyok within {}ms", timeout_ms);
 }
 
 pub fn gen_board_independent() -> BoardState {

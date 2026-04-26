@@ -18,7 +18,8 @@ print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
 
 HIDDEN_SIZE = 256
-OUTPUT_PREFIX = f"nnue_h{HIDDEN_SIZE}"
+DATA_NAME = "10k"   # update per run: "10k", "5k_6m", "old_833k", etc.
+OUTPUT_PREFIX = f"nnue_h{HIDDEN_SIZE}_{DATA_NAME}"
 FEATURE_COUNT = 144
 
 
@@ -47,10 +48,7 @@ def encode_board(board_36):
 
 
 if __name__ == '__main__':
-    files = (
-        [os.path.join(REPO_ROOT, "training", "data", "hce_100kn.csv")] +
-        [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
-    )
+    files = [os.path.join(REPO_ROOT, "training", "data", "hce_10kn.csv")]
     
     # Optional pruning knobs — leave at 0 to disable
     MIN_GAME_MOVES = 0   # drop games shorter than N positions (random-opening junk)

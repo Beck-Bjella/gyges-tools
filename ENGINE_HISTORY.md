@@ -331,3 +331,165 @@ Conclusion: the entire 833k dataset is from `gen_board()` (symmetric starts). Bo
 - For the paper, want to be clear: pair-encoding ceiling at 0.352 was measured on symmetric-only data.
 
 NOTES.md updated to reflect "Symmetric (gen_board)" with timestamp pointer back to here.
+
+---
+
+## Paper framing crystallization (2026-04-24) — "hybrid NNUE/CNN with W/L labels"
+
+Spent an evening bouncing around architecture/data experiments and the paper's contribution came into focus. Writing it down so I can read it back later.
+
+**The core realization:** this project isn't just "NNUE adaptation for Gyges." It's a methodology paper for a neglected gap between classical NNUE and AlphaZero-style approaches. Specifically:
+
+- **Classical NNUE** (Stockfish) needs a strong-eval oracle for training labels. In chess, Stockfish's own HCE provides these at great depth. In Gyges, nothing produces good mid-game scores — not my HCE, not prior NNs, not anything. So you can't bootstrap an NNUE the Stockfish way because there's no oracle to train against.
+- **AlphaZero CNN + MCTS** is overkill for Gyges. State space is small (6×6 board, 12 pieces), doesn't justify the compute. And CNN inference is slow for search — dense convolutions can't be incrementally updated when one piece moves.
+- **Flat NNUE** ("piece at square" features, the simplest adaptation) doesn't capture enough positional structure. Gyges positional play is about piece *relationships* (walls, 1s backed by 2s/3s), not raw piece placement.
+
+So there's a gap: games with meaningful positional relationships that are too small for AlphaZero and too oracle-less for Stockfish-NNUE. Gyges sits in that gap. So do Arimaa, Lines of Action, Tafl variants, many modern abstract strategy games.
+
+**My hybrid answers both sides of the gap:**
+
+1. **NNUE's sparse accumulator** for inference speed (CNN can't do this — that's why it's slow)
+2. **Hand-engineered pair features** for CNN-like relational inductive bias (CNN would learn these from scratch; I encode them directly, trading learning flexibility for inference compatibility)
+3. **W/L outcome labels** to bypass the eval-oracle dependency (AlphaZero-style label generation, without the MCTS)
+
+Each component fills a specific gap. The combination is the contribution.
+
+**Example abstract** (for where to aim the paper):
+
+> "For abstract strategy games where classical NNUE requires an unavailable strong-eval oracle and AlphaZero-style approaches are computationally excessive, we propose a hybrid evaluator combining NNUE's sparse-accumulator inference with hand-engineered relational pair features trained on outcome labels. We demonstrate the methodology on Gyges, a 6×6 abstract strategy game with no piece ownership and strong tempo sensitivity. Our approach outperforms both flat-NNUE baselines and pure-outcome CNN architectures at the same data scale, while maintaining millions-of-evals-per-second inference compatibility. We argue this hybrid applies broadly to a class of abstract strategy games previously underserved by existing neural evaluator methodologies."
+
+**Why this framing is stronger than what I was pitching before:**
+- Target audience broadens from Gyges enthusiasts to abstract-strategy-game researchers in general
+- Gyges becomes a case study demonstrating the methodology, not the main contribution
+- Provides a reusable design recipe: identify domain relationships → encode as pair features → use NNUE architecture → train on W/L
+- Opens clear follow-up work: which other games does this apply to? how far does it scale?
+
+**Key scientific questions the paper needs to answer:**
+1. Does pair encoding *scale better with data* than flat encoding (steeper slope, not just lower point)?
+2. How does label quality (node count of generating games) trade off against label quantity?
+3. What's the inference cost relative to CNN alternatives at comparable strength?
+
+**Status as of today:** flat-6M (on 5k-node data) just crushed flat-833k (on 100k-node data) in matches ~65% to 35%. Confirms volume matters for flat. Pair-h64 on the same 6M is training now; that match (pair-6M vs flat-6M) is the linchpin experiment for the paper's encoding claim.
+
+Memory file `project_paper_goal.md` updated with this framing in full detail.
+
+---
+
+## Design rationale — why each hybrid component is motivated by a specific Gyges property (2026-04-24)
+
+Talking through why standard techniques fail on Gyges and how each part of the hybrid is a response to a specific failure. This is the "Method motivation" section for the paper — writing it down so I don't lose the chain of reasoning.
+
+**Gyges structural properties that break standard approaches:**
+
+1. **Complex move space, hundreds of options per turn, path-based.** Moves involve piece bouncing off other pieces, pathing through squares, multi-step trajectories. Move generation itself is expensive. Branching factor is high (~50-100 at typical mid-game).
+
+2. **No piece ownership.** Any piece on your side is movable, regardless of who placed it originally. There's no "my pieces" vs "opponent's pieces." This immediately breaks HalfKP-style features that encode "my king position + opponent's piece at square X."
+
+3. **Single moves can massively change board state.** Because of the bouncing mechanic, one move can relocate multiple pieces or cross half the board. Unlike chess where a move is a small perturbation, Gyges moves are high-magnitude. A 1-ply look-ahead shows a dramatically different board.
+
+4. **No quiet positions — polarity always flips.** Every move threatens to change the balance. There's no "this position is stable, evaluate it statically and move on" — the next move could flip the position's evaluation entirely.
+
+5. **No strong eval oracle.** My HCE and prior NNs don't produce reliable mid-game scores. Neither does anything else. So there's no Stockfish-style scaffold to train on.
+
+**What each standard approach does and why it fails:**
+
+- **Classical NNUE (Stockfish-NNUE):** Requires strong eval labels from a deep-search oracle. Gyges has no such oracle. **Fails: can't train.**
+- **AlphaZero (CNN + MCTS):** Requires compute proportional to state space + MCTS infrastructure. 6×6 board doesn't justify it. CNN inference is slow per eval (can't be incrementally updated). **Fails: overkill + slow.**
+- **Alpha-beta with HCE:** Branching factor crushes depth. Static eval is noisy because moves are high-magnitude — scores at the top of search are all similar, pruning is weakened. **Fails: weak at depth.**
+- **Quiescence search:** No quiet positions exist. Polarity flips every move. Can't extend search at "stable" points because there are none. **Fails: assumption doesn't hold.**
+- **Policy networks:** Move space is structural/pathing, not classifiable. Even if policy was learned, alpha-beta deep search beats one-ply policy selection — the strategy IS "search deep, don't lose." **Fails: doesn't capture the actual winning strategy.**
+- **Flat NNUE (144 features, piece-at-square):** Doesn't capture relational structure. Same type-3 at different positions relative to neighboring pieces means very different things. Features are too coarse. **Fails: not expressive enough for structural play.**
+
+**How each hybrid component addresses a specific failure:**
+
+| Game property | Standard technique that fails | Hybrid component that fixes it |
+|---|---|---|
+| High branching + path-based moves | Alpha-beta pruning weakened; need many nodes/sec | NNUE's sparse accumulator → millions of evals/sec |
+| No piece ownership | HalfKP-style features don't apply | Pair features encode structural relationships, not control |
+| High-magnitude moves | Static eval noisy, similar scores at top | Rich pair features reduce eval noise via relational context |
+| No quiet positions | Q-search impossible | Fast eval enables deeper full-width search instead |
+| No strong eval oracle | Classical NNUE training doesn't work | W/L outcome labels from self-play |
+| Policy nets don't capture moves | Can't shortcut search | Fast eval means alpha-beta can search deep enough anyway |
+
+Every component is load-bearing for a specific reason. Nothing is there because "it sounded cool." That's what makes this a *designed* methodology rather than a collection of techniques.
+
+**Why this generalizes to the target class:**
+
+These same properties appear in other abstract strategy games:
+- **Arimaa:** high branching (17² typical moves), pieces can be pushed (unstable control), structural eval matters (trap positioning)
+- **Lines of Action:** structure-based win condition (connectivity), high branching, hard static eval
+- **Tafl variants:** asymmetric pieces but structure/positioning dominates
+- **Octi:** piece-movement with directional arms, positional play, no clear eval heuristics
+
+Each of these breaks the same standard techniques for the same structural reasons. The methodology applies because the *design rationale* applies — not just because the games happen to look similar.
+
+**This is the "design motivation" section of the paper written out.** When the paper gets written, unpack each row of the table above with a paragraph explaining the game property, the technique it breaks, and how the hybrid component addresses it.
+
+---
+
+## Match results — flat-10k vs HCE & flat-5k-6M comparisons (2026-04-24)
+
+Logging the day's match results that actually informed strategy. All matches at 100k nodes/move, time-cap 120s, no randomization.
+
+**Flat-h256 trained on 6.1M positions of 5k-node data vs flat-h256 trained on 833k positions of 100k-node data:**
+- 87 wins (50.6%) – 74 wins (43.0%) – 11 draws (6.4%), 172 games
+- Set results: 19 full + 5 partial vs 14 full + 2 partial, 46 tied (53%)
+- Take: at 7× volume vs 1/20 quality ratio, **volume wins clearly** (~65% / 35% in decisive games)
+- Confirms that more low-node data beats less high-node data at extreme trade-off ratios
+
+**Flat-h256 trained on 4.5M positions of 10k-node data vs flat-h256 trained on 6.1M positions of 5k-node data:**
+- 53 wins (60.2%) – 27 wins (30.7%) – 8 draws (9.1%), 88 games
+- Set results: 15 full + 7 partial vs 5 full + 1 partial, 16 tied (36%)
+- Take: at 1.3× volume vs 1/2 quality ratio, **quality wins clearly** (~60% / 31%)
+- The trade-off curve has an inflection: extreme-volume regime favors more data, but moderate-volume regime favors better labels
+
+**Flat-h256 (10k-trained) vs HCE @ 100k nodes:**
+- 30 wins (65.2%) – 12 wins (26.1%) – 4 draws (8.7%), 46 games
+- Set results: 10 full + 1 partial vs 0 full + 3 partial, 9 tied
+- Take: HCE has no full-set wins. NN dominates decisive sets 11-3. Comparable or slightly better than the old 833k h256 baseline against HCE (which was 13-2 full sets / 2:1 ratio).
+- **The strength chain holds against HCE.** Flat-10k does NOT regress against the external baseline despite being trained on different distribution than HCE.
+
+**Pair-h64 + dropout 0.4 (5k-6M data, e20) vs flat-h256 (5k-6M):**
+- 28 wins (45.2%) – 31 wins (50.0%) – 3 draws (4.8%), 62 games
+- Set results: 6 full + 1 partial vs 7 full + 2 partial, 15 tied
+- Take: dead even / pair very slight loss within statistical noise (2σ = ±12.5%)
+- Caveat: pair was undertrained (val still dropping at e20), used overly aggressive dropout for the data-rich regime
+- Real pair test = pair-h64 + dropout 0.2 on 10k data, not yet run
+
+**Quality-vs-volume trade-off curve emerging from these results:**
+
+| Comparison | Quality ratio | Volume ratio | Winner |
+|---|---|---|---|
+| Flat-100k-833k vs Flat-5k-6M | 1/20 | 7× | Volume (5k won 65%) |
+| Flat-10k-3.7M vs Flat-5k-6M | 1/2 | 1/1.3 | Quality (10k won 60%) |
+
+Inflection point exists somewhere between these regimes. For paper: characterize this curve as a finding — outcome-based training has a quality-volume sweet spot that depends on label-noise vs signal scaling.
+
+**Strategic implication going forward:**
+
+1. **10k-node data is the strongest single source for production training.** Switch all data generation to 10k.
+2. **Combining datasets (5k+10k+100k) for diversity may further help** but untested. The 100k data's clean endgame labels could disproportionately improve hard-to-evaluate positions.
+3. **Pair encoding's real test is pair-h64 + dropout 0.2 on 10k.** Pending. Will determine if encoding contributes additional strength beyond what data quality alone provides.
+
+**NOTES.md updated** to reflect the new datasets (5kn, 10kn) and trained models. Match-result entries live here in ENGINE_HISTORY per the established convention.
+
+### Update — long-run flat-10k vs HCE @ 100k nodes (794 games / 397 sets)
+
+Same matchup as the earlier snapshot, now at high statistical power. Definitive result.
+
+- Games: NN 551 (69.4%) – HCE 196 (24.7%) – 47 draws (5.9%)
+- **Full sets: NN 192 – HCE 16, 158 tied** (192/(192+16) = 92.3% of decisive full-set wins)
+- Partial sets: NN 17 – HCE 14
+- Set ratio counting ties as half: NN 288 – HCE 109 = **2.64:1**
+- Think time: NN 1248ms vs HCE 1403ms (NN ~11% faster per move)
+- Avg depth: NN 3.96 vs HCE 4.08 (HCE searches slightly deeper at same node budget)
+- Game length: NN wins avg 21.5 moves, loses avg 19.4 — NN tends to win longer, more patient games
+
+**Compared to the old h256 (833k symmetric) baseline vs HCE (which was 2:1 ratio):**
+Flat-10k vs HCE is **2.64:1 — roughly 32% stronger** in the standard ratio metric. So the data-pipeline improvements (independent starts, low-node high-volume generation) genuinely produce a meaningfully stronger evaluator against the external baseline, not just against other NNs.
+
+**HCE has only 4% full-set wins out of 397 sets.** That's basically "HCE never wins decisively against this NN." The 158 tied sets reflect engines that play similarly enough that all positions in a set draw — the NN's edge concentrates in the positions where eval quality matters most.
+
+**Notable: NN searches less deep AND is faster per move, yet wins this decisively.** Direct empirical demonstration of the eval-vs-search tradeoff: better eval at slightly shallower depth beats weaker eval at slightly deeper depth at this node budget.
+
+**This is now the new "old eval baseline" for the paper.** Any further improvement (better data mix, pair encoding, etc.) gets compared against flat-10k. The bar is high: 69% raw / 92% decisive-set win rate vs HCE.

@@ -21,7 +21,8 @@ print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
 
 HIDDEN_SIZE = 64
-OUTPUT_PREFIX = f"nnue_h{HIDDEN_SIZE}_pairs"
+DATA_NAME = "5k_6m"   # update per run: "5k_6m", "10k", "old_833k", etc.
+OUTPUT_PREFIX = f"nnue_h{HIDDEN_SIZE}_pairs_{DATA_NAME}"
 
 # ── Pair encoding layout (5886 features total) ──────────────────────────────
 #   [   0,  108)  singletons            36 sq × 3 piece types
@@ -108,10 +109,7 @@ def build_batch(indices_gpu, idx, out):
 if __name__ == '__main__':
     # files = [os.path.join(REPO_ROOT, "training", "data", "hce_100kn.csv")]
     # files = [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
-    files = (
-        [os.path.join(REPO_ROOT, "training", "data", "hce_100kn.csv")] +
-        [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
-    )
+    files = [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(15)]
     
     # Optional pruning knobs — leave at 0 to disable
     MIN_GAME_MOVES = 0   # drop games shorter than N positions (random-opening junk)
@@ -158,7 +156,7 @@ if __name__ == '__main__':
     loss_fn   = nn.MSELoss()
 
     epochs = 100
-    batch_size = 1024
+    batch_size = 4096
     n_train = X_train_gpu.shape[0]
     n_val   = X_val_gpu.shape[0]
 
@@ -187,7 +185,7 @@ if __name__ == '__main__':
             train_loss += loss.detach()
             n_train_batches += 1
 
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 1 == 0:
             model.eval()
             val_loss = torch.zeros(1, device=device)
             n_val_batches = 0

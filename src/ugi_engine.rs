@@ -1,8 +1,9 @@
 use std::process::{Command, Stdio, ChildStdout, ChildStdin, Child};
 use std::io::{self, Write, Read};
 use std::thread::{self, JoinHandle};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError, RecvTimeoutError};
 use std::collections::VecDeque;
+use std::time::Duration;
 
 /// Use for running a UGI engine as a child process and communicating with it
 pub struct UgiEngine {
@@ -115,14 +116,32 @@ impl UgiEngine {
 
     pub fn recive(&mut self) -> Option<String> {
         self.try_recive();
-        
+
         if self.recived_queue.len() == 0 {
             return None;
 
         }
 
         return self.recived_queue.pop_back();
-    
+
+    }
+
+    /// Block until a line is available from the engine. Returns None if the
+    /// reader thread has exited (engine died / channel closed).
+    pub fn recive_blocking(&mut self) -> Option<String> {
+        if let Some(s) = self.recived_queue.pop_back() {
+            return Some(s);
+        }
+        self.ouput_reciver.recv().ok()
+    }
+
+    /// Block until a line is available or the timeout elapses. Returns None
+    /// on timeout or if the channel closed.
+    pub fn recive_with_timeout(&mut self, timeout: Duration) -> Option<String> {
+        if let Some(s) = self.recived_queue.pop_back() {
+            return Some(s);
+        }
+        self.ouput_reciver.recv_timeout(timeout).ok()
     }
 
 }
@@ -187,24 +206,23 @@ impl UgiWriter {
 
     pub fn start(&mut self, mut stdin: ChildStdin) {
         loop {
-            match self.data_in.try_recv() {
+            // Block up to 100ms waiting for the next command. Timeout lets us
+            // periodically check the quit signal without burning CPU.
+            match self.data_in.recv_timeout(Duration::from_millis(100)) {
                 Ok(s) => {
                     // If the engine process is dead, writing to its stdin fails — just exit.
                     if stdin.write_all(format!("{}\n", s).as_bytes()).is_err() {
                         break;
                     }
                 }
-                Err(TryRecvError::Disconnected) => break, // sender dropped — UgiEngine was dropped
-                Err(TryRecvError::Empty) => {}
+                Err(RecvTimeoutError::Disconnected) => break, // sender dropped — UgiEngine was dropped
+                Err(RecvTimeoutError::Timeout) => {}
             }
 
             match self.quit_in.try_recv() {
                 Ok(_) | Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
             }
-
-            // Yield so this thread doesn't burn a full CPU core while idle.
-            thread::yield_now();
         }
     }
     
