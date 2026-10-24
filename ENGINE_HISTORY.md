@@ -723,3 +723,51 @@ Same setup, stopped at 63 pairs once the result was clear:
 **Bracket: the release net at 10k nodes ≈ HCE at a bit over 100k nodes** (0.46 vs 100k, 0.34 vs 200k), i.e. its eval is worth roughly 10× the search. It searches ~1.5 ply shallower (2.6 vs 3.95-4.1) and thinks 6-13× less per move.
 
 How the games end fits that: in both matches the NN's wins are long games and its losses are short ones (vs 100k: NN wins avg 22.5 moves, losses 17.8; vs 200k: 23.6 vs 16.9). HCE wins by finding short tactical knockouts with its deeper search; the NN wins by out-positioning it over a longer game, which deeper search can't fully make up for. For gen1 data this means the NN's 10k-node games should be much better played than the HCE 10k games in `hce-10k`, especially in the long positional middlegames.
+
+### Update (same day) — gen1-10k data gen started
+
+Started **`gen1-10k`** on the laptop ~19:55: release net `pair1024_hce-10k_e9` (2.0.0, 1 thread) playing both sides at 10k nodes on every move, randomize `[1, 1, 0]` (first two moves per side random — same as `hce-10k`), independent boards, 12 workers, 10 h budget. Kept the random openers so the only difference from `hce-10k` is who played. The opening-noise question (~4 positions/game get labels that partly reflect a random move) gets tested at training time with `MIN_MOVE_NUM` instead.
+
+`randomize` in 2.0.0 = search normally, drop root moves proven losing, then pick uniformly from the rest (plays a forced win if one is found). It's needed: at fixed nodes on 1 thread the engine is deterministic, and there are only 8,100 start boards (90 × 90), so without it there'd be at most ~16k distinct games.
+
+Rates at 26 min: **~12k positions/h per worker, ~139k/h total**, 18.1 positions/game (hce-10k: 17.3), ~1% draws, 0 forfeits, 0 time-cap hits. The 10 h run should give ~1.4M positions (~7% of hce-10k). At this rate a full 20M set is ~5½ laptop-days, so the bulk will run on AWS (c8a, Zen 5 Turin, 1 vCPU = 1 physical core; us-east-1 on-demand quota is 128 vCPU, increase to 192 requested for on-demand + spot). Things to watch there: each NN engine holds its own 24 MB weight copy, so ~100 engines may become memory-bound — check per-worker positions/h against the laptop's ~12k. Don't write the same dataset name on two machines at once (shard names and game ids would collide).
+
+Plan once it's done: `DATASET = "gen1-10k"` in train_pair.py → `pair1024_gen1-10k`, match vs the release net and vs `pair1024_hce-10k-part1_e6` (4.6M HCE positions — the closer comparison at this data size).
+
+### Update (same day) — laptop gen1-10k stopped, duplication check, moving to AWS
+
+Stopped the laptop run at 22:22 after ~2½ h (moving the bulk to AWS): **352,837 positions, 19,515 games**, all shards end on complete rows.
+
+- Unique boards **96.3%** (hce-10k-part1 was 92.9%). Duplicates are almost all start boards: move 0 is 37.6% unique (7,335 of the 8,100 possible starts used), move 1 98.8%, moves 2+ ~100%.
+- Whole games: 19,514 distinct sequences out of 19,515 — the random openers do their job.
+- Of boards seen more than once (6,112, mostly starts), 66% carry both W and L labels — expected for near-50/50 start positions.
+- Game length mean 18.1 / median 18 (hce-10k: 17.3 / 17), W/L 51.6/48.4 by row, ~1% draws dropped.
+
+AWS run goes under its own name **`gen1-10k-aws`** (same config) so shard names/game ids don't collide with the laptop's `gen1-10k`. Cargo.toml now pins `gyges` to the v2.0.0 git tag (no Windows path), and `gyges-tools datagen <dataset> <workers> <hours>` runs data gen without editing code. Plan: c8a.48xlarge spot in us-east-1a (~$3.74/h vs $10.35 on-demand), 192 workers.
+
+### Update (same day) — gen1-10k-aws running
+
+Launched **`gen1-10k-aws`** on a c8a.48xlarge spot instance (AMD EPYC 9R45, 192 cores, no SMT, 2 NUMA nodes, 370 GB) in us-east-1d at ~$3.78/h (1a had no spot capacity). Amazon Linux, root disk grown 8 → 30 GB. Same config as `gen1-10k`, 190 workers, 10 h budget.
+
+**Build gotcha: v2.0.0 panics when built with current Rust.** First test on the box crashed at ply 2 with `user-provided comparison function does not correctly implement a total order`. The move-ordering comparator in `gyges_engine/src/search/mod.rs:865` (score if >3% apart, else history) isn't transitive, and Rust ≥1.81's sort detects that and panics. The laptop toolchain is 1.80.0 (the engine exe carries rustc commit 051478957), which just sorts silently. Pinned the server to 1.80.0 so its engine matches the laptop one exactly; the comparator needs a real fix in GygesRust before anyone builds the release on modern Rust.
+
+Rates: 4-worker smoke test **~30k positions/h per worker** (2.5× the laptop). At 190 workers **~20k/h per worker, ~3.8M/h total** — the drop is most likely shared L3 (each engine reads its own 24 MB of f32 weights; 8 cores share 32 MB). Fewer workers can't beat the total (96 × 30k = 2.9M/h), so 190 stays. ~20M positions in ~5¼ h; running the full 10 h for ~38M so a matched 20M subset and a data-volume curve both come out of it.
+
+### Update (same day) — small-TT engine test (is the per-move TT realloc slowing data gen?)
+
+v2.0.0 frees and re-allocates its 400 MB TT (`alloc_zeroed`, 2^22 clusters) before every search (`ugi.rs:336` → `tt().reset()`). Suspected the page faults/zeroing were a big part of the 30k → 20k/h per-worker drop at 190 workers. Added `setoption hash <MB>` on a GygesRust branch `tt-size` (off v2.0.0, local only; 2 MB → 16,384 clusters = 1.6 MB) and benched on the laptop: same positions sampled from gen1-10k, 10k nodes, randomize off, stock exe vs new build.
+
+| config | 1 engine (300 pos) | 12 parallel (1200 pos) | same move as stock |
+|---|---|---|---|
+| stock v2.0.0, 400 MB | 7.0 pos/s | 35.9 pos/s | — |
+| new build, 400 MB (control) | 6.6 | 36.2 | 100% |
+| new build, 16 MB | 5.7 | 36.9 | 100% |
+| new build, 2 MB | 7.3 | **38.8 (+8%)** | 100% |
+
+Moves are **identical** at every size, so the TT size has no effect on the data at 10k nodes. But the speed gain is small — ~8% at 12 parallel, single-engine numbers are within run-to-run noise (±10%). The realloc is not the main cost; the NN eval itself is (full-refresh f32, ~78 × 1024 adds per eval). Windows only — Linux page-fault cost could differ, untested on the AWS box. Not worth restarting the AWS run for. Real speedups would need eval work (incremental accumulator, int16 weights), which can change moves.
+
+### Update (same day) — why AWS workers are slower than the smoke test
+
+Profiled the running 190-worker job (no restart): 190 engines at 99% CPU each, `sy` 2% (kernel), 2.2M page faults/s (~2k per move — the TT realloc, but only ~2% of CPU on Linux), run queue ~205 on 192 cores (slight oversubscription), and `perf stat -a`: 5.46e12 cycles / 10 s / 192 cores = **~2.85 GHz per core, IPC 2.58**.
+
+So nothing is gridlocked and the cores aren't stalling on memory (IPC 2.58 = compute-bound). The 30k → 20k/h per-worker drop is the clock: the 4-worker smoke test ran near single-core boost (~4.4 GHz), the full box runs all-core at ~2.85 GHz (ratio ~1.5, matches). Fewer workers won't raise the total; the small TT is worth ~2% here. The only real lever is fewer instructions per move — NN eval work (incremental accumulator, wider SIMD).

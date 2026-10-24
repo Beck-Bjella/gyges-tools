@@ -45,7 +45,8 @@ Everything up to `hce-10k` was generated under the pre-2.0.0 rules (board-unchan
 | **`hce-10k`** | = part1 + part2 (was `hce_10kn_combined.csv`) | 19.77M | HCE / 10k | | **The release data: training set of `pair1024_hce-10k_e9`, shipped in v2.0.0.** `train_pair.py` loads the two archive files directly. |
 | `hce-10k+hce-100k` | mix | 20.61M | | | hce-100k is ~4% of rows ("DUO"). |
 | `hce-10k+hce-100kx8` | mix | 26.44M | | | hce-100k listed 8 times, ~25% of rows. |
-| `gen1-10k` | `training/data/gen1-10k/` | — | `pair1024_hce-10k_e9` / 10k on every move (random openers too) | Independent | **Planned** — first NN self-play data, first data under 2.0.0 rules. 3 h pilot with 14 workers first; resume with the same name to grow it. |
+| `gen1-10k` | `training/data/gen1-10k/` | 0.35M | `pair1024_hce-10k_e9` / 10k on every move (random openers too) | Independent | First NN self-play data, first data under 2.0.0 rules. Laptop, 12 workers, 2026-10-23 19:55-22:22. Unique 96.3%, median length 18. |
+| `gen1-10k-aws` | `training/data/gen1-10k-aws/` | — | same as `gen1-10k` | Independent | Same config as `gen1-10k`, run on AWS c8a.48xlarge (192 workers). Separate name so ids don't collide; train on both together. |
 
 Older time-limited data (`hce_p3r2_1s_161k`, `hce_p3r2_2s_56k`, the 1s game folders) has no registry name — being deleted.
 

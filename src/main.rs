@@ -18,13 +18,21 @@ pub struct EngineConfig {
 
 /// GygesRust v2.0.0 release build. Its embedded default network is
 /// pair1024_hce-10k_e9 (pair encoding, 5886 -> 1024 -> 1; see the NOTES.md registry).
-/// Build it from the GygesRust repo and copy `target/release/gyges_engine.exe` here.
-const ENGINE_V2: &str = "./engines/gyges-v2.0.0.exe";
+/// Build it from the GygesRust repo and copy `target/release/gyges_engine(.exe)` here.
+const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else { "./engines/gyges-v2.0.0" };
 
 fn main() {
+    // `gyges-tools datagen [dataset] [workers] [hours]` runs data gen with
+    // those overrides (for servers, no code edits needed).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("datagen") {
+        run_data_gen(&args[1..]);
+        return;
+    }
+
     // Pick one. SPRT match is the default workflow.
-    run_sprt();
-    // run_data_gen();
+    // run_sprt();
+    run_data_gen(&[]);
 }
 
 // =====================================================================
@@ -118,12 +126,15 @@ fn run_sprt() {
 // training/data/<dataset>/w<NN>.csv; add a row for the dataset to the NOTES.md
 // registry. Re-running with the same name resumes where each worker stopped.
 // Each game is flushed as it finishes, so stopping early is safe.
+//
+// Two machines must not share a dataset name: shard names and game ids come
+// from the name + worker number, so give each machine its own (gen1-10k-aws).
 
 #[allow(dead_code)]
-fn run_data_gen() {
+fn run_data_gen(overrides: &[String]) {
     // {who played}-{nodes per move}: hce-…, or gen{N}-… for NN self-play
     // (gen1 = played by the release net pair1024_hce-10k_e9).
-    let dataset = "gen1-10k";
+    let dataset = overrides.first().map_or("gen1-10k", String::as_str);
 
     // ---- Engine -------------------------------------------------------
     // 2.0.0 with its embedded net (pair1024_hce-10k_e9).
@@ -149,11 +160,11 @@ fn run_data_gen() {
     // ---- Run length ---------------------------------------------------
     // Workers stop at whichever comes first.
     let games_per_worker = 1_000_000;
-    let max_hours        = Some(3.0);
+    let max_hours        = Some(overrides.get(2).map_or(10.0, |h| h.parse().expect("hours must be a number")));
 
     // ---- Parallelism --------------------------------------------------
     // 8 cores / 16 threads: 14 workers for max output, 8 to keep the machine usable.
-    let thread_count     = 14;
+    let thread_count     = overrides.get(1).map_or(12, |w| w.parse().expect("workers must be a number"));
 
     data_gen::generate_data_parallel(dataset, engine, schedules, games_per_worker, max_hours, thread_count, false);
 }

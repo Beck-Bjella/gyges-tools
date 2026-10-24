@@ -22,6 +22,7 @@ dependencies = [
 [[package]]
 name = "gyges"
 version = "2.0.0"
+source = "git+https://github.com/Beck-Bjella/Gyges.git?tag=v2.0.0#261b569492a1efb09e1b19b06f73c311d7fa99d8"
 dependencies = [
  "rand",
 ]

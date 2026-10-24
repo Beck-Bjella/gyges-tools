@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 rand = "0.8.5"
-gyges = { path = "C:\\Users\\beckb\\Documents\\GitHub\\GygesRust\\gyges" }
+# Rules library pinned to the release the engine was built from.
+gyges = { git = "https://github.com/Beck-Bjella/Gyges.git", tag = "v2.0.0" }
