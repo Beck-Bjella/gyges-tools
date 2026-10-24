@@ -8,6 +8,7 @@ Features: 5886 total.
 Network is a sparse-input MLP (FEATURE_COUNT -> HIDDEN -> 1) trained to predict
 game outcome (Tanh output in [-1, 1]).
 """
+import glob
 import os
 from datetime import datetime
 
@@ -15,14 +16,22 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from common import REPO_ROOT, WEIGHTS_DIR, Dataset, device, save_weights
+from common import REPO_ROOT, WEIGHTS_DIR, Dataset, device
 
 print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
 
-HIDDEN_SIZE = 64
-DATA_NAME = "5k_6m"   # update per run: "5k_6m", "10k", "old_833k", etc.
-OUTPUT_PREFIX = f"nnue_h{HIDDEN_SIZE}_pairs_{DATA_NAME}"
+# With DATASET = "hce-10k", this exact config (h1024, dropout 0.5) produced
+# pair1024_hce-10k_e9 (originally e9_pair_h1024_combined.bin), the network
+# shipped in GygesRust v2.0.0. Dataset backup: V2.0.0_release_dataset/README.md.
+#
+# Runs are saved to training/weights/pair{H}_{DATASET}[_{TAG}]/e{N}.bin (see the
+# NOTES.md registry). Set TAG when re-training the same arch on the same data
+# with something changed, e.g. TAG = "drop0.3".
+DATASET     = "hce-10k"
+TAG         = ""
+HIDDEN_SIZE = 1024
+RUN_NAME    = f"pair{HIDDEN_SIZE}_{DATASET}" + (f"_{TAG}" if TAG else "")
 
 # ── Pair encoding layout (5886 features total) ──────────────────────────────
 #   [   0,  108)  singletons            36 sq × 3 piece types
@@ -57,18 +66,42 @@ _PAIR_IDX = _build_pair_idx()
 
 
 class GygesNet(nn.Module):
+    """Pair-encoding NNUE.
+
+    Uses EmbeddingBag for the first layer instead of Linear over a dense scatter.
+    Mathematically equivalent (sum of weight rows for active features) but ~10x
+    faster — no dense (B, FEATURE_COUNT) tensor, no zero-multiplications.
+
+    The +1 in num_embeddings is for the sink/padding index used by encode_all
+    to fill MAX_ACTIVE slots when fewer features fire.
+    """
     def __init__(self):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(FEATURE_COUNT, HIDDEN_SIZE),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-            nn.Linear(HIDDEN_SIZE, 1),
-            nn.Tanh(),
+        self.fc1 = nn.EmbeddingBag(
+            FEATURE_COUNT + 1, HIDDEN_SIZE,
+            mode='sum', padding_idx=FEATURE_COUNT,
         )
+        # PyTorch's default EmbeddingBag init is N(0,1), which is huge: summing
+        # ~78 active features per sample blows pre-activation std to ~8.8 and
+        # saturates the downstream Tanh, killing gradients. Re-init to match
+        # nn.Linear's default (uniform within ±1/sqrt(fan_in)) so training behaves
+        # like the dense scatter+Linear version we replaced.
+        bound = 1.0 / (FEATURE_COUNT ** 0.5)
+        nn.init.uniform_(self.fc1.weight, -bound, bound)
+        # Keep the padding row exactly zero so it contributes nothing in the sum.
+        with torch.no_grad():
+            self.fc1.weight[FEATURE_COUNT].zero_()
+        self.fc1_bias = nn.Parameter(torch.zeros(HIDDEN_SIZE))
+        self.dropout = nn.Dropout(0.5)
+        self.fc2     = nn.Linear(HIDDEN_SIZE, 1)
 
-    def forward(self, x):
-        return self.net(x).squeeze(-1)
+    def forward(self, indices):
+        # indices: (B, MAX_ACTIVE) int64
+        h = self.fc1(indices) + self.fc1_bias
+        h = torch.relu(h)
+        h = self.dropout(h)
+        out = self.fc2(h).squeeze(-1)
+        return torch.tanh(out)
 
 
 def encode_position(board_36):
@@ -98,19 +131,42 @@ def encode_position(board_36):
     return indices
 
 
-def build_batch(indices_gpu, idx, out):
-    """Scatter sparse indices for batch `idx` into preallocated dense `out` [B, FEATURE_COUNT+1]."""
-    out.zero_()
-    batch_idx = indices_gpu[idx]
-    out.scatter_(1, batch_idx, 1.0)
-    return out[:, :FEATURE_COUNT]
+def save_weights_pair(model, path):
+    """Save weights in the engine's expected layout.
+
+    Engine expects fc1 in Linear's `(HIDDEN, FEATURE_COUNT)` shape, but
+    EmbeddingBag stores it as `(FEATURE_COUNT+1, HIDDEN)`. Transpose at save
+    time and drop the padding row so the .bin format matches what engine reads.
+
+    Layout: fc1.weight [HIDDEN, FEATURE_COUNT] + fc1_bias [HIDDEN] +
+            fc2.weight [1, HIDDEN]              + fc2.bias [1]
+    """
+    with open(path, "wb") as f:
+        # fc1: drop padding row, transpose to (HIDDEN, FEATURE_COUNT)
+        fc1_w = model.fc1.weight.data[:FEATURE_COUNT].t().contiguous()
+        f.write(fc1_w.cpu().numpy().astype(np.float32).tobytes())
+        f.write(model.fc1_bias.detach().cpu().numpy().astype(np.float32).tobytes())
+        f.write(model.fc2.weight.detach().cpu().numpy().astype(np.float32).tobytes())
+        f.write(model.fc2.bias.detach().cpu().numpy().astype(np.float32).tobytes())
 
 
 if __name__ == '__main__':
-    # files = [os.path.join(REPO_ROOT, "training", "data", "hce_100kn.csv")]
-    # files = [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(4)]
-    files = [os.path.join(REPO_ROOT, f"training_data_{i}.csv") for i in range(15)]
-    
+    if DATASET == "hce-10k":
+        # The release data: hce-10k-part1 + hce-10k-part2, read straight from the
+        # frozen archive. Loading them in this order gives the same rows in the
+        # same order as the old hce_10kn_combined.csv, so the seeded split matches e9.
+        RELEASE_DIR = os.path.join(REPO_ROOT, "V2.0.0_release_dataset")
+        files = [
+            os.path.join(RELEASE_DIR, "hce_10kn.csv"),
+            os.path.join(RELEASE_DIR, "hce_10kn_big.csv"),
+        ]
+    else:
+        # Data gen output: one shard per worker in training/data/<DATASET>/.
+        shard_dir = os.path.join(REPO_ROOT, "training", "data", DATASET)
+        files = sorted(glob.glob(os.path.join(shard_dir, "w*.csv")))
+        if not files:
+            raise SystemExit(f"no shards found in {shard_dir}")
+
     # Optional pruning knobs — leave at 0 to disable
     MIN_GAME_MOVES = 0   # drop games shorter than N positions (random-opening junk)
     MIN_MOVE_NUM   = 0   # drop positions earlier than this within their game
@@ -132,8 +188,9 @@ if __name__ == '__main__':
 
     # Sparse encoding: each position becomes a list of active feature indices.
     # Pad to MAX_ACTIVE with FEATURE_COUNT (the "sink" index) so scatter is safe.
+    # int16 is enough (FEATURE_COUNT=5886 << 32k); 4× memory savings vs int64.
     def encode_all(boards):
-        out = np.full((len(boards), MAX_ACTIVE), FEATURE_COUNT, dtype=np.int64)
+        out = np.full((len(boards), MAX_ACTIVE), FEATURE_COUNT, dtype=np.int16)
         for i in range(len(boards)):
             active = encode_position(boards[i])
             out[i, :len(active)] = active
@@ -146,10 +203,12 @@ if __name__ == '__main__':
     y_val   = val.outcomes
     print(f"Train indices: {X_train.shape}  Val indices: {X_val.shape}")
 
-    X_train_gpu = torch.tensor(X_train, dtype=torch.long,    device=device)
-    y_train_gpu = torch.tensor(y_train, dtype=torch.float32, device=device)
-    X_val_gpu   = torch.tensor(X_val,   dtype=torch.long,    device=device)
-    y_val_gpu   = torch.tensor(y_val,   dtype=torch.float32, device=device)
+    # Push encoded indices to GPU as int16 (~6GB for 30M positions vs 24GB int64).
+    # EmbeddingBag needs int64 indices, so we convert per-batch from the int16 slice.
+    X_train_gpu = torch.from_numpy(X_train).to(device)   # int16
+    y_train_gpu = torch.from_numpy(y_train).to(device)
+    X_val_gpu   = torch.from_numpy(X_val).to(device)
+    y_val_gpu   = torch.from_numpy(y_val).to(device)
 
     model     = GygesNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -160,12 +219,11 @@ if __name__ == '__main__':
     n_train = X_train_gpu.shape[0]
     n_val   = X_val_gpu.shape[0]
 
-    # Preallocated scatter buffer reused across batches (saves allocation per step).
-    scatter_buf = torch.empty(batch_size, FEATURE_COUNT + 1, device=device)
-
-    run_dir = os.path.join(WEIGHTS_DIR, f"{OUTPUT_PREFIX}_{datetime.now():%Y%m%d_%H%M%S}")
-    os.makedirs(run_dir, exist_ok=True)
-    print(f"Run: {run_dir}")
+    run_dir = os.path.join(WEIGHTS_DIR, RUN_NAME)
+    if os.path.exists(run_dir):
+        raise SystemExit(f"{run_dir} already exists — set a TAG for this run")
+    os.makedirs(run_dir)
+    print(f"Run: {run_dir}  (started {datetime.now():%Y-%m-%d %H:%M})")
 
     for epoch in range(epochs):
         model.train()
@@ -174,10 +232,9 @@ if __name__ == '__main__':
         n_train_batches = 0
         for i in range(0, n_train, batch_size):
             idx = perm[i:i + batch_size]
-            buf = scatter_buf if idx.shape[0] == batch_size else torch.empty(idx.shape[0], FEATURE_COUNT + 1, device=device)
-            X = build_batch(X_train_gpu, idx, buf)
-            y = y_train_gpu[idx]
-            pred = model(X)
+            X_idx = X_train_gpu[idx].long()  # int16 slice → int64 for EmbeddingBag
+            y     = y_train_gpu[idx]
+            pred = model(X_idx)
             loss = loss_fn(pred, y)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -192,10 +249,9 @@ if __name__ == '__main__':
             with torch.no_grad():
                 for i in range(0, n_val, batch_size):
                     end = min(i + batch_size, n_val)
-                    vidx = torch.arange(i, end, device=device)
-                    buf = scatter_buf if vidx.shape[0] == batch_size else torch.empty(vidx.shape[0], FEATURE_COUNT + 1, device=device)
-                    X = build_batch(X_val_gpu, vidx, buf)
-                    val_loss += loss_fn(model(X), y_val_gpu[i:end])
+                    X_idx = X_val_gpu[i:end].long()
+                    y     = y_val_gpu[i:end]
+                    val_loss += loss_fn(model(X_idx), y)
                     n_val_batches += 1
 
             avg_val   = (val_loss   / n_val_batches).item()
@@ -206,5 +262,5 @@ if __name__ == '__main__':
                   f"val: {avg_val:.4f}")
 
             out_path = os.path.join(run_dir, f"e{epoch + 1}.bin")
-            save_weights(model, out_path)
+            save_weights_pair(model, out_path)
             print(f"  Saved {out_path}")

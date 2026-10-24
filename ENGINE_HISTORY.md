@@ -493,3 +493,233 @@ Flat-10k vs HCE is **2.64:1 — roughly 32% stronger** in the standard ratio met
 **Notable: NN searches less deep AND is faster per move, yet wins this decisively.** Direct empirical demonstration of the eval-vs-search tradeoff: better eval at slightly shallower depth beats weaker eval at slightly deeper depth at this node budget.
 
 **This is now the new "old eval baseline" for the paper.** Any further improvement (better data mix, pair encoding, etc.) gets compared against flat-10k. The bar is high: 69% raw / 92% decisive-set win rate vs HCE.
+
+## Catch-up entries — pair-encoding scaling era (2026-04-29)
+
+Backfilled because results were piling up undocumented. Numbers below are quoted verbatim from match-output paste; anything I don't have raw data for is flagged explicitly.
+
+### Methodology updates landed since last entry
+
+- **Match analyzer parallelized.** New `analyze_parallel(set_count, thread_count)` in `src/engine_analyzer.rs`: each worker owns its own engine pair, pulls set indices off an atomic counter, sends `SetResult`s back to main over an mpsc channel. Main accumulates and prints rolling summary per set. Workers print `[wN] set X done — E1 a / E2 b / draws c` lines as they finish. Single-worker mode falls back to verbose per-move printing for live watching. Test runs use 12 workers.
+- **Independent starting boards.** `analyze_worker` now calls `gen_board_independent()` instead of the symmetric `gen_board()`. Results from this point forward sample the full starting-position distribution, not just the symmetric subset. *Caveat:* high tied-set rate barely moved (39.3% → 39.9% in the comparison runs), so deterministic-play convergence — not opening narrowness — is what was driving ties.
+- **Mixed-format CSV loader fix.** `Dataset.from_files` was producing `i64::MIN` for missing metadata when concatenating 39-col + 37-col CSVs (the new 10kn-with-metadata files combined with legacy 100kn). Fix in `training/common.py`: load files separately, fall back to legacy 37-col mode if any file lacks metadata. Board features were always correct; only the unused move_num/game_id columns were corrupted, so prior runs that didn't use the filter knobs were unaffected.
+
+### Pair-h1024x32 vs HCE @ 100k nodes (410 games / 205 sets — first documented pair-vs-HCE result)
+
+Architecture: pair encoding (5886 features) → h1024 → 32 → 1, trained on `hce_10kn_combined.csv` (combined 10kn dataset, ~19.77M raw positions). Match conditions: 100k node budget, max-time 120s, no randomization, independent starting boards, parallel 12-worker.
+
+- Games: NN 323 (78.8%) – HCE 71 (17.3%) – 16 draws (3.9%)
+- **Full sets: NN 122 – HCE 2, 65 tied (31.7%)** — NN takes 122/(122+2) = 98.4% of decisive full sets
+- Partial sets: NN 14 – HCE 2
+- Think time: NN 6059ms vs HCE 3206ms (NN ~89% slower per move from heavier eval)
+- Avg depth: NN 3.86 vs HCE 3.88 — **same depth despite 2x slower eval per move.** The eval cost is paying for itself at search time.
+- Game length: NN wins avg 20.2, loses avg 20.5 — symmetric, no length-bias
+
+**Compared to the prior "best documented baseline" (flat-h256 / 10kn vs HCE, 794 games):**
+
+| Metric | flat-h256 vs HCE | pair-h1024x32 vs HCE |
+|---|---|---|
+| NN raw win rate | 69.4% | **78.8%** (+9.4 pp) |
+| HCE full-set wins | 4.0% (16/397) | **1.0%** (2/205) |
+| NN decisive-set share | 92.3% | **98.4%** |
+| Set ratio (ties = ½) | **2.64 : 1** | **~4.6 : 1** |
+
+So pair encoding at h1024 + tail layer is roughly 75% stronger than flat-h256 by the standard set-ratio metric, against the same external baseline. HCE practically never decisively wins against this NN.
+
+**Caveat — the NN-vs-NN story is much narrower than the NN-vs-HCE story.** See below.
+
+### Pair-h1024x32 vs Pair-h1024 (no tail), both on `hce_10kn_combined.csv` (486 games / 243 sets)
+
+Architectural-isolation match. Three variables differ between the nets, not just the tail:
+1. Tail layer: x32 has `Linear(1024, 32) → ReLU → Linear(32, 1)`; plain h1024 goes straight to `Linear(1024, 1)`
+2. Dropout: x32 = 0.3, plain h1024 = 0.5 (per user's recollection — original h1024 dropout not logged)
+3. Dataset: both trained on the same combined 10kn set; this *is* matched
+
+So this match cleanly tells you "x32 architecture (with its co-tuned dropout) vs h1024 architecture (with its co-tuned dropout)" — not "tail vs no-tail" alone.
+
+- Games: x32 244 (50.2%) – h1024 210 (43.2%) – 32 draws (6.6%)
+- Full sets: x32 65 – h1024 51, 97 tied (39.9%)
+- Partial: x32 18 – h1024 12
+- Think time: x32 5535ms vs h1024 3501ms (x32 ~58% slower)
+- Avg depth: x32 4.16 vs h1024 4.09 (essentially matched)
+
+**Take:** x32 is marginally stronger (~+7 pp raw, ~14:12 in decisive full sets) but pays substantial wall-clock cost. The strength gain is real, but small relative to the cost. **At fixed node budget x32 wins; at fixed time budget x32 likely evaporates because each move spends more compute.**
+
+**Decision: drop x32 from the active rotation, keep plain h1024 as the architectural baseline going forward.** Weights file `e5_pair_h1024x32_combined.bin` retained for paper comparison if needed.
+
+### Plain h1024 trained on bigger combined dataset vs original `e6_pair_h1024_10k.bin` (224 games / 112 sets)
+
+Dataset isolation experiment intent: same architecture (h1024 no tail), train on the bigger `hce_10kn_combined.csv` instead of the original smaller `hce_10kn.csv`, see if the bigger data wasn't broken / was helpful. Used dropout 0.5.
+
+**Confound:** the original h1024_10k training didn't have its dropout value logged. User recalls 0.5 for the original but isn't certain — could have been lower. So this match is "bigger data + (maybe) different dropout" vs "smaller data + original training", not a pure data-isolation A/B.
+
+- Games: COMBINED 131 (58.5%) – 10K 80 (35.7%) – 13 draws (5.8%)
+- **Full sets: COMBINED 42 – 10K 17, 40 tied (35.7%)** — COMBINED takes 42/59 = 71% of decisive full sets, ratio ~2.47:1
+- Partial: COMBINED 7 – 10K 6
+- Think time / depth basically matched (4286ms / 4.10 vs 4229ms / 4.07)
+- User noted result was "consistent for 50+ games" before the snapshot — direction is stable, not early-variance noise
+
+**Take:** the new h1024 (bigger combined data, dropout 0.5) is clearly stronger than the original `e6_pair_h1024_10k`. ~2-3x in decisive sets is well outside any reasonable noise floor at this sample size.
+
+**Conclusions, with appropriate caveats:**
+1. The bigger 10k_combined data is at least non-harmful, and almost certainly helpful — this rules out the "the new 15M positions are corrupting the model" worry.
+2. Whether the strength gain is from more data, the dropout change, or both is undetermined. User's pragmatic call: doesn't matter for production purposes, adopt as new baseline. Could be cleanly isolated by retraining on the smaller 10k set with dropout 0.5; not deemed worth the compute.
+3. **The "h1024 is extraction-bound on the smaller 10kn data" theory from the prior era now needs revising.** More data (or better regularization) clearly does buy more strength, so the previous extraction-bound observation was specific to that training configuration, not a general ceiling on the encoding.
+
+**This is the new "current best" replacing `e6_pair_h1024_10k`.** Going forward, "PAIR h1024 COMBINED" / "PAIR h1024" without qualifier refers to this new model.
+
+### Pair-h1024 trained on (10k_combined + 100kn) vs Pair-h1024 trained on (10k_combined alone) — "DUO vs COMBINED" (536 games / 268 sets)
+
+Combo experiment. Same architecture (h1024 no tail), same dropout (0.5), same training procedure — only the training data changed. Combo run added `hce_100kn.csv` (~833k positions of 100k-node-budget HCE games) to the existing `hce_10kn_combined.csv`. The 100kn rows were only **4% of the combined dataset** at this mix.
+
+Hypothesis being tested: does the cleaner endgame labeling from 100k-node search add signal that 10k-node games miss?
+
+- Games: DUO 256 (47.8%) – COMBINED 246 (45.9%) – 34 draws (6.3%)
+- Full sets: DUO 63 – COMBINED 58, 113 tied (42.2%)
+- Partial: DUO 17 – COMBINED 17
+- Decisive full-set ratio: 63 / (63+58) = **52% — within statistical noise of 50/50**
+- Think time / depth matched
+- User noted DUO was "slightly up the whole time" — the lean is real but the magnitude is consistent with sampling variance at 502 decisive games (1σ ≈ 11 wins)
+
+**Take:** at 4% mix, the 100kn data did not produce a measurable strength gain. Two non-mutually-exclusive interpretations:
+
+1. **Encoding is genuinely capped** — the 100kn signal is real in principle but the network can't extract additional information from any data at this width.
+2. **100kn volume too small to move the gradient** — 4% effective contribution is small enough that even valuable signal could be drowned by 96% 10kn gradient pull. Not the same conclusion as encoding-limited.
+
+This experiment can't distinguish (1) from (2). Disambiguating requires either oversampling/weighting the 100kn data, or generating substantially more 100kn data so the proportion is healthier.
+
+### Val curves from the two h1024 runs
+
+Provided here so the convergence shape is on record. **Val sets differ between the two runs** — the (10k+100kn) val split contains 100kn positions the (10k_combined alone) val split never saw — so val loss numbers are NOT directly comparable. Engine match results are the comparator (above). Listing for completeness:
+
+| Epoch | h1024 on 10k_combined | h1024 on 10k_combined + 100kn |
+|---|---|---|
+| 1 | train 0.4170 / val 0.4022 | train 0.4148 / val 0.4000 |
+| 5 | 0.3892 / 0.3917 | 0.3877 / 0.3896 |
+| 10 | 0.3754 / 0.3901 | 0.3743 / 0.3880 |
+| 11 | 0.3733 / 0.3901 (val plateau) | run crashed — traceback truncated by user, not diagnosed |
+
+Val plateau in both cases lands in the e8-e11 window. Best epochs both runs were picked by user from this range (specific epoch index of the weights actually used in the matches above is not in my data — both should be checkpoints in `training/weights/nnue_h1024_pairs_*` directories from 2026-04-29).
+
+### Things deliberately NOT in this catch-up
+
+- **Pair-h1024 vs HCE.** User recalls a result like "49-1" but it isn't in either ENGINE_HISTORY or NOTES — never logged. Not invented here. Direction of the result (NN dominant) is consistent with x32-vs-HCE above, but specific numbers are not on record. Re-running pair-h1024 vs HCE at 100k nodes under the new methodology (independent starts, parallel analyzer) would establish a clean baseline if needed.
+- **h2048 result.** Memory says "h2048 didn't help" but I have no raw match data in this catch-up. Not characterizing the magnitude.
+- **Original `e6_pair_h1024_10k` training config.** Specifically the dropout value used at training time — user recalls 0.5 but this is uncertain. The match results above stand independent of this.
+
+### Open question / next experiment in flight
+
+To disambiguate the DUO vs COMBINED ambiguity, a weighted-100kn run is in progress: same combo dataset but with `hce_100kn.csv` listed 8 times in the file list (8x oversampling → ~25% effective contribution instead of 4%). If this run produces a clear strength win against COMBINED, the 100kn signal is real and the prior result was a volume issue. If it produces another coin-flip, encoding-limit becomes the strong read.
+
+Match-test results pending.
+
+---
+
+## 2026-10-23 — back from the search detour: v2.0.0 shipped, tools synced to 2.0.0 rules
+
+**What happened to the open threads from 04-29:**
+- The 100kn×8 oversampling run (`nnue_h1024_pairs_10k_plus_100kx8_20260429_213158`) never saved a checkpoint — the run dir is empty. Never match-tested. DUO-vs-COMBINED stays unresolved.
+- h2048 didn't beat h1024 (per notes from ~05-04). Match numbers were never logged.
+- May → Oct went to search work in GygesRust (lazy SMP / coop / scout → YBWC, merged 06-13), tested with the SPRT runner here. Those parallel-search SPRT results weren't logged in this file.
+
+**v2.0.0 released 2026-10-22.** Ships `e9_pair_h1024_combined` as the embedded `weights/default.bin` (md5 match checked: `75a3b36a…`). That's epoch 9 of `nnue_h1024_pairs_10k_combined_20260429_172819` — 5886 → 1024 → 1, dropout 0.5, on `hce_10kn_combined.csv`. The benchmark report is in GygesRust `benchmarks/2.0.0/results/report.md`. The NN-vs-HCE part (same 2.0.0 engine, only the eval differs, 1 thread, 100 pairs per budget):
+
+| nodes | WW | WD | DD | LD | LL | decisive share |
+|---|---|---|---|---|---|---|
+| 20k | 67 | 3 | 30 | 0 | 0 | 100% |
+| 50k | 68 | 2 | 26 | 0 | 4 | 94% |
+| 100k | 65 | 1 | 32 | 0 | 2 | 97% |
+
+NN runs at ~0.65× HCE nodes/sec. Side note for later: the engine's NN eval re-sums every active feature row from scratch every node (f32, no incremental accumulator), so the "sparse accumulator for speed" part of the method isn't actually implemented in the engine yet.
+
+**Rules change in 2.0.0** (GygesRust 62274ce, 10-09): every move must change the board. Movegen no longer produces (a) a bounce that ends on its own start square or (b) a drop-swap that puts the same piece type back on the start square.
+
+The tools never checked move legality — the runner just applied whatever the engine sent. So the rule only reached the tools through whichever engine binary was being run, and both binaries in `engines/` predate it. Changes:
+- Every engine move is now checked against the `gyges` library's legal move list (`BoardState::is_legal`) before it's applied. Illegal move → that engine forfeits (match) or the game is discarded (data gen). Logged as `[EVENT]` on stderr. So the sim follows whatever rules the library has, regardless of engine age. Unit tests cover both kinds of board-unchanged move.
+- **Bug found:** 2.0.0 rejects `setoption maxNodes 0` and keeps its *previous* limit. The tools used 0 to mean "no cap" (data gen `[0, 0, 5000]`), so under 2.0.0 the opening moves would have silently inherited the last game's cap. Fixed by sending a huge cap instead of 0.
+- Folded in the robustness changes from the v2.0.0 benchmark patches (`tools_runner_*.patch`): hard per-move limit of 2× time + 5s (engine killed + forfeits), crashed/killed engines restart between games, a 1.1.0 `100|100|100` resign counts as a loss, `bestmove` lines without score/time are OK.
+- Built `engines/gyges_v2.0.0.exe` from the v2.0.0 tag. The default SPRT config is now v2.0.0 vs v2.0.0, with `weightsPath` swapped on the candidate side, 1 search thread each, 100k nodes, 4 games at once (each 2.0.0 engine allocates a ~400MB TT).
+
+**Caveat — all training data is pre-2.0.0 rules.** Counted board-unchanged moves in `hce_10kn_combined.csv` (row i+1 = row i flipped, same game): **185,515 of 18.6M in-game moves (~1.0%), in ~164k of ~885k games (~19%)**. So e9 learned from games where HCE sometimes passed. The positions themselves are still legal, but the outcomes come from games played under the old rules. Each pass also leaves an exact "same board, other side to move" pair in the data — the tempo-swap pair we argued against faking via augmentation. Worth knowing for the paper. Any newly generated data will be under the new rules, so old-vs-new data mixes have a rules confound.
+
+**Cleanup:**
+- `engine_analyzer.rs` split into `game.rs` (engine I/O + one game + legality) and `data_gen.rs`. The match worker moved into `match_runner.rs`. A `Schedules` struct replaces the four schedule vectors.
+- Removed `convert_dataset` (control-feature re-encoder, dead since control features were dropped) and with it the `gyges_engine` dependency.
+- The summary box now prints the limits line so pasted results carry their conditions.
+- Smoke-tested: 6-pair SPRT v2 HCE vs v2 NN at 3k nodes ran clean (no false `[EVENT]`s over 255 validated moves). A 2-worker × 3-game data gen wrote correct 39-col rows.
+
+**Dataset backup:** e9's training set = `DATASET_BACKUP/hce_10kn.csv` + `hce_10kn_big.csv` (byte concat, md5 verified). `hce_10kn_big.csv` had no backup. Its 15 raw shards were sitting in the repo root, where the next data-gen run would have appended to them. Copied the big file and moved the shards to `DATASET_BACKUP_V2/` with hashes + rebuild steps in its README. `DATASET_BACKUP/` untouched. Still only on this one SSD.
+
+**Comparability note:** results from here on use the v2.0.0 binary on both sides plus the pentanomial SPRT box. Older NN-vs-NN results used older engine builds (`gyges_large_1024.exe`, etc.) and full/partial/tied set counts. Directionally comparable, but not the same instrument.
+
+### Update (same day) — verified e9's training data + script
+
+**Is `hce_10kn_big.csv` really 10k-node data?** The code doesn't say for sure: the commented data-gen block at `a7de0d7` (Apr 26) reads `vec![0, 0, 5_000]; // 10k node limit`, so the value and the comment disagree. Compared per-game stats instead:
+
+| dataset | rows | games | mean len | len p10/25/50/75/90 | first-mover win | unique |
+|---|---|---|---|---|---|---|
+| hce_5kn | 6.12M | 367k | 16.67 | 7/12/16/21/26 | 52.20% | 92.19% |
+| hce_10kn | 4.57M | 264k | 17.33 | 7/12/17/21/27 | 54.37% | 92.92% |
+| hce_10kn_big | 15.20M | 877k | 17.34 | 7/12/17/21/27 | 54.42% | 90.86% |
+
+`big` matches 10kn almost exactly and is clearly off from 5kn, so it's 10k-node data. That makes `hce_10kn_combined` = all the 10k-node data we have (10kn + big). Not proof from a log, but a strong fingerprint.
+
+**Does the current `train_pair.py` match what made e9?** Loaded the shipped `e9_pair_h1024_combined.bin` into the current script's `GygesNet`, rebuilt the same split (`random_state=42`) from `hce_10kn_combined.csv`, and recomputed val: **0.3901**, matching the logged plateau (e10/e11 = 0.3901). Re-saving through `save_weights_pair` gives back the shipped file byte for byte. So the data, split, encoding and export layout are confirmed. Dropout/lr/batch can't be read back from the weights, but nothing suggests they changed (0.5 / 1e-3 / 4096 is what every h1024 run used).
+
+Known non-reproducible bit: no torch seed (init + shuffle), so a rerun gives a different e9. The split is seeded.
+
+### Update (same day) — removed `train_flat.py`
+
+Dropped the flat 144-feature training script; pair encoding won and flat isn't going anywhere. Also dropped `common.save_weights`, which only flat used. The last version is in commit `768207a` if a flat baseline is ever needed again for the paper's flat-vs-pair scaling comparison. Note that the 2.0.0 engine only loads the 5886 → 1024 → 1 pair layout, so flat nets would also need the old `engines/baselines/gyges_144x*.exe` builds to be match-tested. The flat results above and the flat weights on disk are untouched.
+
+### Update (same day) — dataset cleanup + `V2.0.0_release_dataset/`
+
+Renamed `DATASET_BACKUP_V2/` → `V2.0.0_release_dataset/` and moved `hce_10kn.csv` in from `DATASET_BACKUP/`. The folder now holds both halves of e9's training set (`hce_10kn.csv` + `hce_10kn_big.csv`; concat md5 re-verified = `2535d843…`). Started deleting old data: the 1s/2s time-limited sets are gone from the repo `DATASET_BACKUP/` (the old `Desktop/DATASET_BACKUP/` duplicate still has them). Plan is to keep only the 10k-node data.
+
+Gotcha found while explaining the combined set: both 10k data-gen runs numbered games the same way (`worker * 10M + game`), so game IDs repeat between the two halves (~885k distinct IDs for ~1.14M games). e9 is unaffected (game filters were off), but `filter_min_moves` or any game-aware split would merge unrelated games on the combined file. New naming scheme will give each data-gen run its own ID range.
+
+### Update (same day) — naming scheme, engines cleanup, data gen ready for NN data
+
+**Naming scheme.** Everything gets a short id, and NOTES.md is the registry (old name → id for every dataset and run). Datasets `d{NN}-{who played}-{nodes}`, training runs `m{NN}-{arch}-{dataset}/e{N}.bin`, nets `m{NN}e{N}`, engines `gyges-v{version}.exe`. The shipped net `e9_pair_h1024_combined` is now **m22e9**, and its training set "10kn_combined" is **d05** (= d03 `hce_10kn` + d04 `hce_10kn_big`). Renamed all `training/weights/` run dirs (m06–m23; m01–m05 only survive as nets in `engines/legacy/`) and removed 4 empty run dirs. The archive `V2.0.0_release_dataset/` keeps its original file names — it's frozen.
+
+**Engines cleanup.** Deleted the old pre-2.0.0 builds (`gyges_large_1024.exe`, `gyges_engine.exe`) and the weights that were md5 duplicates of training checkpoints and that no current engine can load (h2048, h1024x32, flat e70, a second e6 copy). Moved the four flat width-sweep nets (only copies left) and their `gyges_144x*` builds to `engines/legacy/`. `engines/` is now `gyges-v2.0.0.exe` + `weights/{m14e6, m22e9, m23e9}.bin` (all loadable by 2.0.0) + `legacy/`.
+
+**Runner: separate schedules per engine**, so asymmetric budgets work (NN@10k vs HCE@100k, etc.). When budgets differ, the summary box shows both.
+
+**Data gen** now writes `training/data/<dataset>/w{NN}.csv`, no more shards in the repo root. Game ids are `(dataset_num*1000 + worker) * 10M + game`, so they can't collide across runs like d03/d04 did. Restarting with the same dataset name resumes each worker's numbering. Default config = **d08-m22e9-10k**: 2.0.0 with its embedded net, 10k nodes on *every* move including the two randomized openers (uncapped, 2.0.0 spends the full 5s on each random move). Smoke-tested at 2k nodes (ids + resume correct). `train_pair.py` names runs from `MODEL_ID` / `DATASET_ID` and refuses to overwrite an existing run dir.
+
+**Started: m22e9 NN @10k vs HCE @100k** — same 2.0.0 binary, 1 search thread each, 4 games at once, 200 pairs. Question: how much HCE search does the NN's eval equal at the budget we'd generate data with? Results to follow.
+
+### Update (same day) — switched to readable names; NN@10k vs HCE@100k result
+
+**Naming, take 2.** The short-id scheme (d08 / m22e9) was confusing, so it's replaced with names that say what things are: datasets `{who played}-{nodes}` (`hce-10k` = release data = `hce-10k-part1` + `-part2`; NN self-play is `gen1-5k`, `gen2-…`), runs `{encoding}{width}_{dataset}` (`pair1024_hce-10k`), nets `{run}_e{N}`. **The release net is `pair1024_hce-10k_e9`.** Registry + old→new table in NOTES.md. Run folders and engine nets renamed again; the archive keeps its original file names.
+
+**Data gen safe-stop.** Each game is now written + flushed as it finishes (it was every 50 games — stopping a run early would lose up to 50 games/worker and could leave half a row, which also broke resume). On restart a half-written last row is trimmed. Added an optional time budget (`max_hours`). Game ids now come from a hash of the dataset name instead of a number. Smoke-tested: cut a row in half by hand → trimmed on resume, all rows 39 cols, ids continued.
+
+**Match: `pair1024_hce-10k_e9` @10k nodes vs HCE @100k nodes** (same 2.0.0 binary, 1 search thread each, 4 games at once, independent boards). Stopped at 177 of 200 pairs:
+
+| | |
+|---|---|
+| pair score (NN) | **0.462**, 95% CI [0.411, 0.513] |
+| pentanomial LL / LD / DD / WD / WW | 47 / 7 / 84 / 4 / 35 |
+| games NN – HCE – draw | 158 – 185 – 11 |
+| think time / depth | NN 249 ms, 2.64 · HCE 1564 ms, 3.95 |
+| forfeits | 0 |
+
+So NN at 10k nodes is a bit weaker than HCE at 10× the nodes, but close (0.46, CI barely includes 0.5) — while thinking ~6× less wall-clock per move. For data gen: NN@10k game quality ≈ just under HCE@100k. For reference, the release net was trained on HCE@10k games. Next: NN@10k vs HCE@200k to bracket it.
+
+### Update (same day) — NN@10k vs HCE@200k
+
+Same setup, stopped at 63 pairs once the result was clear:
+
+| | |
+|---|---|
+| pair score (NN) | **0.341**, 95% CI [0.254, 0.429] |
+| pentanomial LL / LD / DD / WD / WW | 29 / 0 / 24 / 2 / 8 |
+| games NN – HCE – draw | 42 – 82 – 2 |
+| think time / depth | NN 216 ms, 2.58 · HCE 2781 ms, 4.10 |
+| forfeits | 0 |
+
+**Bracket: the release net at 10k nodes ≈ HCE at a bit over 100k nodes** (0.46 vs 100k, 0.34 vs 200k), i.e. its eval is worth roughly 10× the search. It searches ~1.5 ply shallower (2.6 vs 3.95-4.1) and thinks 6-13× less per move.
+
+How the games end fits that: in both matches the NN's wins are long games and its losses are short ones (vs 100k: NN wins avg 22.5 moves, losses 17.8; vs 200k: 23.6 vs 16.9). HCE wins by finding short tactical knockouts with its deeper search; the NN wins by out-positioning it over a longer game, which deeper search can't fully make up for. For gen1 data this means the NN's 10k-node games should be much better played than the HCE 10k games in `hce-10k`, especially in the long positional middlegames.

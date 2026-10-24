@@ -2,7 +2,6 @@ use std::process::{Command, Stdio, ChildStdout, ChildStdin, Child};
 use std::io::{self, Write, Read};
 use std::thread::{self, JoinHandle};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError, RecvTimeoutError};
-use std::collections::VecDeque;
 use std::time::Duration;
 
 /// Use for running a UGI engine as a child process and communicating with it
@@ -17,7 +16,6 @@ pub struct UgiEngine {
     writer_thread: Option<JoinHandle<()>>,
     writer_quit_sender: Sender<bool>,
 
-    recived_queue: VecDeque<String>,
 }
 
 impl Drop for UgiEngine {
@@ -74,10 +72,14 @@ impl UgiEngine {
             writer_thread: Some(writer_thread),
             writer_quit_sender: quit_sender_2,
 
-            recived_queue: VecDeque::new(),
 
         };
 
+    }
+
+    /// True while the engine process is still running.
+    pub fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     /// Kills the child process immediately. Safe to call multiple times.
@@ -86,61 +88,15 @@ impl UgiEngine {
         let _ = self.child.wait();
     }
 
-    pub fn quit(&mut self) {
-        self.send("quit");
-
-        self.reader_quit_sender.send(true).unwrap();
-        self.writer_quit_sender.send(true).unwrap();
-
-        self.reader_thread.take().unwrap().join().unwrap();
-        self.writer_thread.take().unwrap().join().unwrap();
-
-    }
-
     pub fn send(&mut self, cmd: &str) {
-        self.input_sender.send(cmd.to_string()).expect("Failed to send data to the engine");
+        // A dead engine is detected when its reply never comes; don't panic here.
+        let _ = self.input_sender.send(cmd.to_string());
 
-    }
-
-    fn try_recive(&mut self) {
-        match self.ouput_reciver.try_recv() {
-            Ok(s) => {
-                self.recived_queue.push_front(s.clone());
-
-            }
-            Err(_) => {}
-
-        }
-
-    }
-
-    pub fn recive(&mut self) -> Option<String> {
-        self.try_recive();
-
-        if self.recived_queue.len() == 0 {
-            return None;
-
-        }
-
-        return self.recived_queue.pop_back();
-
-    }
-
-    /// Block until a line is available from the engine. Returns None if the
-    /// reader thread has exited (engine died / channel closed).
-    pub fn recive_blocking(&mut self) -> Option<String> {
-        if let Some(s) = self.recived_queue.pop_back() {
-            return Some(s);
-        }
-        self.ouput_reciver.recv().ok()
     }
 
     /// Block until a line is available or the timeout elapses. Returns None
-    /// on timeout or if the channel closed.
+    /// on timeout or if the channel closed (engine died).
     pub fn recive_with_timeout(&mut self, timeout: Duration) -> Option<String> {
-        if let Some(s) = self.recived_queue.pop_back() {
-            return Some(s);
-        }
         self.ouput_reciver.recv_timeout(timeout).ok()
     }
 

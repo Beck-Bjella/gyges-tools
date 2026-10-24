@@ -27,13 +27,6 @@ def mirror_board(board_36):
     return mirrored
 
 
-def save_weights(model, path):
-    """Write fc weights + biases as raw f32, ordered by named_parameters()."""
-    with open(path, "wb") as f:
-        for _, param in model.named_parameters():
-            f.write(param.detach().cpu().numpy().astype(np.float32).tobytes())
-
-
 # ── Dataset ────────────────────────────────────────────────────────────────
 
 def _is_starting_board(board):
@@ -68,16 +61,28 @@ class Dataset:
     def from_files(cls, files, outcome_scale=0.75):
         """Load one or more CSVs. Auto-detects 37-col vs 39-col format.
 
+        If any file is 37-col legacy, the whole batch falls back to no-metadata
+        mode (otherwise pd.concat would NaN-fill the missing columns and
+        astype(int64) would produce i64::MIN garbage).
+
         Outcomes are scaled (default 0.75) to sit in Tanh's linear region.
         """
-        df = pd.concat([pd.read_csv(f, header=None) for f in files], ignore_index=True)
-        ncols = df.shape[1]
-        if ncols not in (37, 39):
-            raise ValueError(f"Unexpected CSV column count: {ncols} (expected 37 or 39)")
+        dfs = [pd.read_csv(f, header=None) for f in files]
+        ncols_per_file = [df.shape[1] for df in dfs]
+        for n in ncols_per_file:
+            if n not in (37, 39):
+                raise ValueError(f"Unexpected CSV column count: {n} (expected 37 or 39)")
+
+        has_metadata = all(n == 39 for n in ncols_per_file)
+        if not has_metadata:
+            # Trim any 39-col files down to 37 before concat so we don't carry NaN-filled metadata
+            dfs = [df.iloc[:, :37] for df in dfs]
+
+        df = pd.concat(dfs, ignore_index=True)
 
         boards    = df.iloc[:, :36].values.astype(np.int64)
         outcomes  = df.iloc[:, 36].values.astype(np.float32) * outcome_scale
-        if ncols == 39:
+        if has_metadata:
             move_nums = df.iloc[:, 37].values.astype(np.int64)
             game_ids  = df.iloc[:, 38].values.astype(np.int64)
         else:
@@ -85,8 +90,10 @@ class Dataset:
             game_ids  = None
 
         ds = cls(boards, outcomes, move_nums, game_ids)
+        mixed_note = "" if all(n == ncols_per_file[0] for n in ncols_per_file) else " (mixed formats — fell back to legacy)"
         print(f"Loaded {len(ds):,} rows from {len(files)} file(s) — "
-              f"{'with metadata (move_num, game_id)' if ds.has_metadata else 'legacy 37-col format'}")
+              f"{'with metadata (move_num, game_id)' if ds.has_metadata else 'legacy 37-col format'}"
+              f"{mixed_note}")
         return ds
 
     # ── Properties ────────────────────────────────────────────────────────
@@ -106,7 +113,9 @@ class Dataset:
         wins   = int((self.outcomes > 0).sum())
         losses = int((self.outcomes < 0).sum())
         draws  = n - wins - losses
-        unique = len(np.unique(self.boards, axis=0))
+        # Pandas drop_duplicates is hash-based and scales cleanly to 30M+ rows.
+        # Downcast to int8 (boards are 0-3) for 8× memory reduction.
+        unique = pd.DataFrame(self.boards.astype(np.int8)).drop_duplicates().shape[0]
         dupes  = n - unique
 
         print(f"\n{'-' * 50}")

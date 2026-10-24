@@ -1,9 +1,13 @@
 mod board;
-mod engine_analyzer;
+mod data_gen;
+mod game;
+mod match_runner;
+mod sprt;
 mod ugi_engine;
 
-use std::env;
-use engine_analyzer::EngineAnalyzer;
+use game::Schedules;
+use match_runner::run_sprt_match;
+use sprt::SprtConfig;
 
 #[derive(Clone)]
 pub struct EngineConfig {
@@ -12,247 +16,144 @@ pub struct EngineConfig {
     pub init_commands: Vec<String>,
 }
 
-// Main entry point for generating training data
+/// GygesRust v2.0.0 release build. Its embedded default network is
+/// pair1024_hce-10k_e9 (pair encoding, 5886 -> 1024 -> 1; see the NOTES.md registry).
+/// Build it from the GygesRust repo and copy `target/release/gyges_engine.exe` here.
+const ENGINE_V2: &str = "./engines/gyges-v2.0.0.exe";
+
 fn main() {
-    // Analysis
-    run_analysis();
-
-    // ========== DATA CONVERSION ==========
-    // for i in 0..1 {
-    //     let input = format!("training\\data\\hce_100kn.csv");
-    //     let output = format!("training\\data\\hce_100kn_converted.csv");
-    //     println!("Converting file {} of 24: {} -> {}", i + 1, input, output);
-    //     convert_dataset(&input, &output);
-    // }
-
-    // ========== DATA GENERATION ==========
-    // let args: Vec<String> = env::args().collect();
-
-    // let thread_count: usize = args.get(1)
-    //     .and_then(|s| s.parse().ok())
-    //     .unwrap_or_else(|| {
-    //         println!("Usage: gyges-tools <thread_count> [games_per_worker]");
-    //         std::process::exit(1);
-    //     });
-
-    // let games_per_worker: usize = args.get(2)
-    //     .and_then(|s| s.parse().ok())
-    //     .unwrap_or(10000);
-
-    // println!("Starting with {} workers, {} games per worker", thread_count, games_per_worker);
-
-    // // Engines
-    // let hce_baseline = EngineConfig {
-    //     name: String::from("HCE"),
-    //     path: String::from("./engines/gyges_144x256"),
-    //     init_commands: vec![
-    //         String::from("setoption nn false"),
-    //         String::from("setoption nnAcc off"),
-    //     ],
-    // };
-
-    // // Setup
-    // let debug = false;
-    // let depth_schedule = vec![60]; // NO DEPTH LIMIT
-    // let time_schedule = vec![5]; // 5 sec max
-    // let randomize_schedule = vec![1, 1, 0];
-    // let node_schedule = vec![0, 0, 5_000]; // 10k node limit
-
-    // let mut engine_analyser = EngineAnalyzer::new(
-    //     hce_baseline.clone(),
-    //     hce_baseline.clone(),
-    //     depth_schedule,
-    //     time_schedule,
-    //     randomize_schedule,
-    //     node_schedule,
-    //     debug,
-    // );
-
-    // // Kill the engines spawned by new() — parallel workers spawn their own
-    // engine_analyser.kill_engines();
-
-    // // Generate training data
-    // engine_analyser.generate_data_parallel(games_per_worker, thread_count);
-
+    // Pick one. SPRT match is the default workflow.
+    run_sprt();
+    // run_data_gen();
 }
 
+// =====================================================================
+//                        SPRT MATCH (default)
+// =====================================================================
+//
+// Plays paired games (same opening, swapped first mover) between ENGINE_A
+// and ENGINE_B. Prints a full summary box every pair.
+//
+// To change what's tested: edit the blocks below. Nets are named
+// {arch}_{dataset}_e{epoch} (NOTES.md registry) and live in engines/weights/.
+// Any net loaded with weightsPath must match the width compiled into the
+// engine (5886 -> 1024 -> 1); the engine rejects other sizes.
 
-/// Runs engine vs engine analysis for testing/comparison.
 #[allow(dead_code)]
-fn run_analysis() {
-    let hce = EngineConfig {
-        name: String::from("HCE"),
-        path: String::from("./engines/gyges_144x256"),
-        init_commands: vec![String::from("setoption nn false")],
-    };
-    let nn_144x256 = EngineConfig {
-        name: String::from("NN 256"),
-        path: String::from("./engines/gyges_144x256"),
+fn run_sprt() {
+    // ---- Engines under test ------------------------------------------
+    // ENGINE_A is the "candidate" — H1 asks whether it scores ≥ h1_score.
+    let engine_a = EngineConfig {
+        name: String::from("pair1024_hce-10k_e9 @10k"),
+        path: String::from(ENGINE_V2),
         init_commands: vec![
             String::from("setoption nn true"),
-            String::from("setoption nnAcc off"),
-            String::from("setoption weightsPath engines\\weights\\e100_144x256.bin"),
+            String::from("setoption threads 1"),
         ],
     };
-    let nn_144x256_6m = EngineConfig {
-        name: String::from("NN 256 6M"),
-        path: String::from("./engines/gyges_144x256"),
+    let engine_b = EngineConfig {
+        name: String::from("HCE @200k"),
+        path: String::from(ENGINE_V2),
         init_commands: vec![
-            String::from("setoption nn true"),
-            String::from("setoption nnAcc off"),
-            String::from("setoption weightsPath engines\\weights\\e60_144x256_6m.bin"),
+            String::from("setoption nn false"),
+            String::from("setoption threads 1"),
         ],
     };
-    let nn_144x256_10kn = EngineConfig {
-        name: String::from("NN 256 10Kn"),
-        path: String::from("./engines/gyges_144x256"),
-        init_commands: vec![
-            String::from("setoption nn true"),
-            String::from("setoption nnAcc off"),
-            String::from("setoption weightsPath engines\\weights\\e70_144x256_10kn.bin"),
-        ],
-    };
-    // let nn_pair_6m = EngineConfig {
-    //     name: String::from("PAIR 6M"),
-    //     path: String::from("./engines/gyges_large"),
+    // A different net on the same engine:
+    // let engine_a = EngineConfig {
+    //     name: String::from("pair1024_gen1-5k_e6"),
+    //     path: String::from(ENGINE_V2),
     //     init_commands: vec![
     //         String::from("setoption nn true"),
-    //         String::from("setoption nnAcc off"),
-    //         String::from("setoption weightsPath engines\\weights\\e20_pair_h64_6m.bin"),
+    //         String::from("setoption weightsPath engines\\weights\\pair1024_gen1-5k_e6.bin"),
+    //         String::from("setoption threads 1"),
     //     ],
     // };
 
+    // ---- Schedules ---------------------------------------------------
+    // One set per engine. Node-budget matches (fixed nodes, generous time cap)
+    // compare evals on a known search workload; equal budgets on both sides is
+    // how all NN-vs-NN tests have been run.
+    let a_schedules = Schedules {
+        depth:     vec![30],       // ply cap per move
+        time:      vec![120],      // seconds per move (hard cap; runner kills at 2x + 5s)
+        randomize: vec![0],        // engine-side move randomization
+        nodes:     vec![10_000],   // node cap per move (0 = no cap)
+    };
+    let b_schedules = Schedules {
+        nodes: vec![200_000],
+        ..a_schedules.clone()
+    };
 
+    // ---- SPRT parameters ---------------------------------------------
+    // h1_score is the bar for "engine_a is meaningfully better."
+    //   0.505 → ~3.5 chess-Elo equiv  (very fine tuning)
+    //   0.510 → ~7    "               (small edge)
+    //   0.520 → ~14   "               (clear edge — default)
+    //   0.550 → ~35   "               (strong improvement)
+    let sprt_cfg = SprtConfig {
+        h0_score: 0.500,
+        h1_score: 0.520,
+        alpha: 0.05,
+        beta:  0.05,
+        min_pairs: 16,
+        max_pairs: 200,                 // 200 pairs = 400 games; raise (or Ctrl-C) as needed
+        auto_stop_on_decision: false,   // keep running past verdict so CIs keep tightening
+    };
 
+    // ---- Parallelism -------------------------------------------------
+    // Games played at once. Each runs two engines, and each 2.0.0 engine
+    // allocates a ~400 MB transposition table.
+    let thread_count = 4;
 
-    let debug = true;
-    let depth_schedule = vec![30]; // NO DEPTH LIMIT 
-    let time_schedule = vec![120]; // 4 min max
-    let randomize_schedule = vec![0]; // NO RANDOMIZATION
-    let node_schedule = vec![100_000]; // NO NODE LIMIT
-
-    let mut analyser = EngineAnalyzer::new(
-        hce.clone(),
-        nn_144x256_10kn.clone(),
-        depth_schedule,
-        time_schedule,
-        randomize_schedule,
-        node_schedule,
-        debug,
-    );
-
-    let data = analyser.analyze(1000);
-    data.print_summary();
-
-    analyser.quit();
-
+    // ---- Run ---------------------------------------------------------
+    let _summary = run_sprt_match(engine_a, engine_b, sprt_cfg, a_schedules, b_schedules, thread_count, false);
 }
 
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
+// =====================================================================
+//                         TRAINING DATA GENERATION
+// =====================================================================
+//
+// Self-play games using a single engine config. Shards go to
+// training/data/<dataset>/w<NN>.csv; add a row for the dataset to the NOTES.md
+// registry. Re-running with the same name resumes where each worker stopped.
+// Each game is flushed as it finishes, so stopping early is safe.
 
-/// Converts an existing position CSV to include per-square control features.
-/// The board is already in "my perspective" — current player's home rank at rank 0.
-///
-/// Input CSV columns:  sq0..sq35 (piece type 0-3), outcome (-1/1)  — no header
-/// Output CSV columns: sq0_piece, sq0_ctrl, ..., sq35_piece, sq35_ctrl, outcome
-///
-/// Control values: +1 = my unique (P1), 0 = shared/empty, -1 = opponent unique (P2)
-///
-fn convert_dataset(input_path: &str, output_path: &str) {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader, BufWriter, Write};
-    use gyges::board::BoardState;
-    use gyges::moves::movegen::MoveGen;
-    use gyges_engine::search::evaluation::EvaluationContext;
+#[allow(dead_code)]
+fn run_data_gen() {
+    // {who played}-{nodes per move}: hce-…, or gen{N}-… for NN self-play
+    // (gen1 = played by the release net pair1024_hce-10k_e9).
+    let dataset = "gen1-10k";
 
-    let reader = BufReader::new(File::open(input_path).expect("Cannot open input CSV"));
-    let mut writer = BufWriter::new(File::create(output_path).expect("Cannot create output CSV"));
+    // ---- Engine -------------------------------------------------------
+    // 2.0.0 with its embedded net (pair1024_hce-10k_e9).
+    let engine = EngineConfig {
+        name: String::from("pair1024_hce-10k_e9"),
+        path: String::from(ENGINE_V2),
+        init_commands: vec![
+            String::from("setoption nn true"),
+            String::from("setoption threads 1"),
+        ],
+    };
 
-    let mut mg = MoveGen::default();
-    let mut count = 0;
+    // ---- Schedules ----------------------------------------------------
+    // The node cap applies to the randomized opening moves too: uncapped,
+    // 2.0.0 spends the full maxTime searching each random move.
+    let schedules = Schedules {
+        depth:     vec![60],         // effectively no depth cap
+        time:      vec![5],          // 5 sec per move (safety cap)
+        randomize: vec![1, 1, 0],    // randomize first two moves only
+        nodes:     vec![10_000],     // 10k nodes on every move
+    };
 
-    for line in reader.lines() {
-        let line = line.unwrap();
+    // ---- Run length ---------------------------------------------------
+    // Workers stop at whichever comes first.
+    let games_per_worker = 1_000_000;
+    let max_hours        = Some(3.0);
 
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() < 37 {
-            continue;
-        }
+    // ---- Parallelism --------------------------------------------------
+    // 8 cores / 16 threads: 14 workers for max output, 8 to keep the machine usable.
+    let thread_count     = 14;
 
-        // Reconstruct board string from the 36 square values
-        let board_str: String = cols[..36].iter().map(|s| s.trim()).collect();
-        let outcome = cols[36].trim();
-
-        let mut board = BoardState::from(board_str.as_str());
-
-        // Compute piece control bitboards — P1 = current player (at rank 0)
-        let ctx = EvaluationContext::new(&mut board, &mut mg);
-
-        // Build output row: piece_type + control scalar per square
-        let mut row: Vec<String> = Vec::with_capacity(73);
-        let mut control_grid = [0i32; 36];
-        for sq in 0..36usize {
-            let piece_type: i32 = cols[sq].trim().parse().unwrap_or(0);
-
-            let control = if piece_type == 0 {
-                0
-
-            } else {
-                let bit = 1u64 << sq;
-                if ctx.unique_piece_control[0].0 & bit != 0 {
-                    1 // my unique
-                } else if ctx.unique_piece_control[1].0 & bit != 0 {
-                    -1 // opponent unique
-                } else {
-                    0 // shared
-                }
-
-            };
-
-            control_grid[sq] = control;
-            row.push(piece_type.to_string());
-            row.push(control.to_string());
-
-        }
-
-        row.push(outcome.to_string());
-
-        writeln!(writer, "{}", row.join(",")).unwrap();
-
-        count += 1;
-
-        // Print first 5 boards for verification
-        if count <= 5 {
-            println!("── Row {} ── outcome: {}", count, outcome);
-            println!("  {}", board);
-            for row_idx in 0..6 {
-                print!("  ");
-                for col_idx in 0..6 {
-                    let sq = row_idx * 6 + col_idx;
-                    let piece: i32 = cols[sq].trim().parse().unwrap_or(0);
-                    let ctrl_str = match control_grid[sq] {
-                        1 => "me",
-                        -1 => "op",
-                        _ => " =",
-                    };
-                    print!("[{} {}] ", piece, ctrl_str);
-
-                }
-                println!();
-                
-            }
-            println!();
-            
-        }
-
-        if count % 5000 == 0 {
-            println!("Processed {} rows...", count);
-        }
-
-    }
-
-    println!("Done. {} rows written to {}", count, output_path);
-
+    data_gen::generate_data_parallel(dataset, engine, schedules, games_per_worker, max_hours, thread_count, false);
 }
