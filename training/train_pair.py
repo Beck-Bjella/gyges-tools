@@ -28,7 +28,7 @@ print(f"PyTorch version: {torch.__version__}")
 # Runs are saved to training/weights/pair{H}_{DATASET}[_{TAG}]/e{N}.bin (see the
 # NOTES.md registry). Set TAG when re-training the same arch on the same data
 # with something changed, e.g. TAG = "drop0.3".
-DATASET     = "hce-10k"
+DATASET     = "gen1-10k+gen1-10k-aws"
 TAG         = ""
 HIDDEN_SIZE = 1024
 RUN_NAME    = f"pair{HIDDEN_SIZE}_{DATASET}" + (f"_{TAG}" if TAG else "")
@@ -161,11 +161,15 @@ if __name__ == '__main__':
             os.path.join(RELEASE_DIR, "hce_10kn_big.csv"),
         ]
     else:
-        # Data gen output: one shard per worker in training/data/<DATASET>/.
-        shard_dir = os.path.join(REPO_ROOT, "training", "data", DATASET)
-        files = sorted(glob.glob(os.path.join(shard_dir, "w*.csv")))
-        if not files:
-            raise SystemExit(f"no shards found in {shard_dir}")
+        # Data gen output: one shard per worker in training/data/<dataset>/.
+        # A mix ("gen1-10k+gen1-10k-aws") loads the shards of every part.
+        files = []
+        for part in DATASET.split("+"):
+            shard_dir = os.path.join(REPO_ROOT, "training", "data", part)
+            part_files = sorted(glob.glob(os.path.join(shard_dir, "w*.csv")))
+            if not part_files:
+                raise SystemExit(f"no shards found in {shard_dir}")
+            files += part_files
 
     # Optional pruning knobs — leave at 0 to disable
     MIN_GAME_MOVES = 0   # drop games shorter than N positions (random-opening junk)

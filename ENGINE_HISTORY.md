@@ -771,3 +771,15 @@ Moves are **identical** at every size, so the TT size has no effect on the data 
 Profiled the running 190-worker job (no restart): 190 engines at 99% CPU each, `sy` 2% (kernel), 2.2M page faults/s (~2k per move — the TT realloc, but only ~2% of CPU on Linux), run queue ~205 on 192 cores (slight oversubscription), and `perf stat -a`: 5.46e12 cycles / 10 s / 192 cores = **~2.85 GHz per core, IPC 2.58**.
 
 So nothing is gridlocked and the cores aren't stalling on memory (IPC 2.58 = compute-bound). The 30k → 20k/h per-worker drop is the clock: the 4-worker smoke test ran near single-core boost (~4.4 GHz), the full box runs all-core at ~2.85 GHz (ratio ~1.5, matches). Fewer workers won't raise the total; the small TT is worth ~2% here. The only real lever is fewer instructions per move — NN eval work (incremental accumulator, wider SIMD).
+
+### Update (same day) — where the duplicates come from (hce-10k-part1 vs gen1-10k)
+
+Same breakdown as gen1-10k, on `hce-10k-part1` (4.57M rows, 263,738 games): 92.9% unique, 323,877 duplicate rows. **79% of those are start boards** — move 0 is 263,738 rows but only 8,100 distinct boards (all 90 × 90 used). Move 1: 84.8% unique, move 2+: ~99.6%, moves 20+: 97.5%.
+
+Leaving out move 0: hce-10k-part1 is 98.4% unique, gen1-10k 99.7%. So the headline dup rate is mostly "how many games vs 8,100 starts", and it rises with dataset size for any data source — gen1's 96.3% at 19.5k games will drop toward ~93% at hce-10k-part1's size. The real difference is mid/late game: HCE repeats more there (97.5% unique at moves 20+ vs gen1's 99.7%), plausibly the old rules (board-unchanged moves) plus more forcing HCE lines.
+
+Training keeps duplicates (no dedup in `train_pair.py`; `stats()` only counts them). With MSE on W/L, a repeated board trains toward its average outcome, which is the right target. Side effects: start boards are ~5.5-5.8% of rows with labels close to coin flips, and the random split puts copies of the same board in both train and val (val slightly optimistic, same for both datasets). Raw rows are a fair size measure between these two sets since the dup structure matches.
+
+### Update (same day) — do start boards favour a side? (hce-10k, all 1.14M games)
+
+Per start board, first-mover win rate (move-0 label): 8,100 boards, 94-188 games each (mean 141). **First mover wins 54.4% overall.** Spread of per-board win rates: sd 4.6 pts observed vs 4.2 pts expected from binomial noise alone → real board-to-board sd only **~1.8 pts**. So beyond the first-move edge, start boards barely matter, and the "best/worst" boards (73% / 37%) are what noise at n≈140 gives across 8,100 boards — not real favourable setups. Caveat: both sides' first two moves are random, which washes out any start-board effect; under strong play from move 1 it could be bigger. The net learns roughly "side to move ≈ 54%" on start boards plus small per-board tweaks.

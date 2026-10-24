@@ -46,7 +46,7 @@ Everything up to `hce-10k` was generated under the pre-2.0.0 rules (board-unchan
 | `hce-10k+hce-100k` | mix | 20.61M | | | hce-100k is ~4% of rows ("DUO"). |
 | `hce-10k+hce-100kx8` | mix | 26.44M | | | hce-100k listed 8 times, ~25% of rows. |
 | `gen1-10k` | `training/data/gen1-10k/` | 0.35M | `pair1024_hce-10k_e9` / 10k on every move (random openers too) | Independent | First NN self-play data, first data under 2.0.0 rules. Laptop, 12 workers, 2026-10-23 19:55-22:22. Unique 96.3%, median length 18. |
-| `gen1-10k-aws` | `training/data/gen1-10k-aws/` | — | same as `gen1-10k` | Independent | Same config as `gen1-10k`, run on AWS c8a.48xlarge (192 workers). Separate name so ids don't collide; train on both together. |
+| `gen1-10k-aws` | `training/data/gen1-10k-aws/` | 4.35M | same as `gen1-10k` | Independent | Same config as `gen1-10k`, run on AWS c8a.48xlarge, 190 workers, ~1 h 15 min on 2026-10-24 (stopped to match hce-10k-part1 size; instance stopped, can resume). Separate name so ids don't collide; train on both together. |
 
 Older time-limited data (`hce_p3r2_1s_161k`, `hce_p3r2_2s_56k`, the 1s game folders) has no registry name — being deleted.
 
@@ -76,6 +76,7 @@ Run folders in `training/weights/`. "Net" = the epoch that got used, if one was.
 | `pair1024x32_hce-10k` | nnue_h1024x32_pairs_10k_combined (20260429_001055) | 6 (e5) | not logged, dropout 0.3. Net deleted (duplicate, no engine loads x32) |
 | **`pair1024_hce-10k`** | nnue_h1024_pairs_10k_combined (20260429_172819) | 11 (**e9**) | 0.3901 (plateau e8-e11), dropout 0.5. **Net `pair1024_hce-10k_e9` = shipped in GygesRust v2.0.0** as `weights/default.bin` (md5 75a3b36a…), was `e9_pair_h1024_combined.bin` |
 | `pair1024_hce-10k+hce-100k` | nnue_h1024_pairs_10k_plus_100k (20260429_185729) | 10 (e9) | 0.3880 @ e10 — different val set. "DUO", coin flip vs the release net. Net `pair1024_hce-10k+hce-100k_e9` |
+| `pair1024_gen1-10k+gen1-10k-aws` | — (2026-10-24, current train_pair.py) | 8 (**e6**) | 0.3539 @ e6 (e7 0.3538, e8 0.3544 back up), train 0.3259 @ e6; dropout 0.5, release recipe. First net trained on NN self-play data (4.70M rows, size-matched to hce-10k-part1). Different val set — not comparable to 0.3901. Net `pair1024_gen1-10k+gen1-10k-aws_e6` |
 | — | nnue_h1024_pairs_10k_plus_100kx8 (20260429_213158) | — | trained on `hce-10k+hce-100kx8`, never saved a checkpoint; empty dir removed |
 
 Empty run dirs removed 2026-10-23 (no checkpoints): 20260424_141232, 20260427_013035, 20260427_015132, 20260429_213158.

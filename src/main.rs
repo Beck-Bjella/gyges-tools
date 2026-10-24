@@ -31,8 +31,8 @@ fn main() {
     }
 
     // Pick one. SPRT match is the default workflow.
-    // run_sprt();
-    run_data_gen(&[]);
+    run_sprt();
+    // run_data_gen(&[]);
 }
 
 // =====================================================================
@@ -52,28 +52,29 @@ fn run_sprt() {
     // ---- Engines under test ------------------------------------------
     // ENGINE_A is the "candidate" — H1 asks whether it scores ≥ h1_score.
     let engine_a = EngineConfig {
-        name: String::from("pair1024_hce-10k_e9 @10k"),
+        name: String::from("pair1024_gen1-10k+gen1-10k-aws_e6"),
         path: String::from(ENGINE_V2),
         init_commands: vec![
             String::from("setoption nn true"),
+            String::from("setoption weightsPath engines/weights/pair1024_gen1-10k+gen1-10k-aws_e6.bin"),
             String::from("setoption threads 1"),
         ],
     };
     let engine_b = EngineConfig {
-        name: String::from("HCE @200k"),
+        name: String::from("pair1024_hce-10k-part1_e6"),
         path: String::from(ENGINE_V2),
         init_commands: vec![
-            String::from("setoption nn false"),
+            String::from("setoption nn true"),
+            String::from("setoption weightsPath engines/weights/pair1024_hce-10k-part1_e6.bin"),
             String::from("setoption threads 1"),
         ],
     };
-    // A different net on the same engine:
-    // let engine_a = EngineConfig {
-    //     name: String::from("pair1024_gen1-5k_e6"),
+    // HCE on the same engine:
+    // let engine_b = EngineConfig {
+    //     name: String::from("HCE @200k"),
     //     path: String::from(ENGINE_V2),
     //     init_commands: vec![
-    //         String::from("setoption nn true"),
-    //         String::from("setoption weightsPath engines\\weights\\pair1024_gen1-5k_e6.bin"),
+    //         String::from("setoption nn false"),
     //         String::from("setoption threads 1"),
     //     ],
     // };
@@ -88,10 +89,7 @@ fn run_sprt() {
         randomize: vec![0],        // engine-side move randomization
         nodes:     vec![10_000],   // node cap per move (0 = no cap)
     };
-    let b_schedules = Schedules {
-        nodes: vec![200_000],
-        ..a_schedules.clone()
-    };
+    let b_schedules = a_schedules.clone();
 
     // ---- SPRT parameters ---------------------------------------------
     // h1_score is the bar for "engine_a is meaningfully better."
