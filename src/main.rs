@@ -60,15 +60,25 @@ fn run_sprt() {
             String::from("setoption threads 1"),
         ],
     };
+    // The release net, embedded in 2.0.0 (no weightsPath needed).
     let engine_b = EngineConfig {
-        name: String::from("pair1024_hce-10k-part1_e6"),
+        name: String::from("pair1024_hce-10k_e9"),
         path: String::from(ENGINE_V2),
         init_commands: vec![
             String::from("setoption nn true"),
-            String::from("setoption weightsPath engines/weights/pair1024_hce-10k-part1_e6.bin"),
             String::from("setoption threads 1"),
         ],
     };
+    // Size-matched HCE-data net:
+    // let engine_b = EngineConfig {
+    //     name: String::from("pair1024_hce-10k-part1_e6"),
+    //     path: String::from(ENGINE_V2),
+    //     init_commands: vec![
+    //         String::from("setoption nn true"),
+    //         String::from("setoption weightsPath engines/weights/pair1024_hce-10k-part1_e6.bin"),
+    //         String::from("setoption threads 1"),
+    //     ],
+    // };
     // HCE on the same engine:
     // let engine_b = EngineConfig {
     //     name: String::from("HCE @200k"),
@@ -87,7 +97,7 @@ fn run_sprt() {
         depth:     vec![30],       // ply cap per move
         time:      vec![120],      // seconds per move (hard cap; runner kills at 2x + 5s)
         randomize: vec![0],        // engine-side move randomization
-        nodes:     vec![10_000],   // node cap per move (0 = no cap)
+        nodes:     vec![50_000],   // node cap per move (0 = no cap)
     };
     let b_schedules = a_schedules.clone();
 
@@ -110,7 +120,7 @@ fn run_sprt() {
     // ---- Parallelism -------------------------------------------------
     // Games played at once. Each runs two engines, and each 2.0.0 engine
     // allocates a ~400 MB transposition table.
-    let thread_count = 4;
+    let thread_count = 8;
 
     // ---- Run ---------------------------------------------------------
     let _summary = run_sprt_match(engine_a, engine_b, sprt_cfg, a_schedules, b_schedules, thread_count, false);

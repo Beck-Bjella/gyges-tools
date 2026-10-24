@@ -783,3 +783,64 @@ Training keeps duplicates (no dedup in `train_pair.py`; `stats()` only counts th
 ### Update (same day) — do start boards favour a side? (hce-10k, all 1.14M games)
 
 Per start board, first-mover win rate (move-0 label): 8,100 boards, 94-188 games each (mean 141). **First mover wins 54.4% overall.** Spread of per-board win rates: sd 4.6 pts observed vs 4.2 pts expected from binomial noise alone → real board-to-board sd only **~1.8 pts**. So beyond the first-move edge, start boards barely matter, and the "best/worst" boards (73% / 37%) are what noise at n≈140 gives across 8,100 boards — not real favourable setups. Caveat: both sides' first two moves are random, which washes out any start-board effect; under strong play from move 1 it could be bigger. The net learns roughly "side to move ≈ 54%" on start boards plus small per-board tweaks.
+
+### Update (2026-10-24) — first gen1 net: pair1024_gen1-10k+gen1-10k-aws_e6 vs pair1024_hce-10k-part1_e6 @10k
+
+Trained `pair1024_gen1-10k+gen1-10k-aws` with the release recipe (h1024, dropout 0.5, lr 1e-3, batch 4096, mirror on, no filters) on 4,704,430 rows (12 laptop + 190 AWS shards): 93.0% unique, 261,317 games — matched to hce-10k-part1 (4,571,787 rows, 92.9% unique, 263,738 games). Val 0.3689 → 0.3542 (e5) → 0.3539 (e6) → 0.3538 (e7) → 0.3544 (e8, back up); train still falling (0.3259 @ e6, 0.3096 @ e8). Took **e6** (same epoch as the HCE net). Val is far below the release run's 0.3901 but it's a different val set — gen1 outcomes may just be more predictable (one player, self-consistent), so loss says nothing about strength here.
+
+Match: same 2.0.0 engine, both nets via `weightsPath`, 10k nodes, 1 thread, randomize 0, independent boards, 4 games at once, 200 pairs (7 min).
+
+| | |
+|---|---|
+| pair score (gen1) | **0.559**, 95% CI [0.508, 0.609], LOS 98.9% |
+| pentanomial LL / LD / DD / WD / WW | 41 / 6 / 83 / 5 / 65 |
+| games gen1 – hce – draw | 217 – 170 – 13 |
+| think time / depth | gen1 201 ms, 2.61 · hce 227 ms, 2.79 |
+
+SPRT inconclusive against the 0.52 bar (LLR +1.46), but the CI clears 0.5: **at equal data size, NN self-play data gives a stronger net than HCE data** — modest, ~56% pair score. It wins with slightly shallower search, so the gain is in the eval. Caveats: part1_e6's dropout was never logged (may not be 0.5), and the HCE data is pre-2.0.0 rules (~1% board-unchanged moves). A clean baseline would retrain hce-10k-part1 with today's script. Next: same match at 100k nodes, then gen1 vs the release net.
+
+### Update (same day) — gen1 e6 vs the release net @10k
+
+Same setup, B = `pair1024_hce-10k_e9` (embedded), 8 games at once, 200 pairs (4m 42s).
+
+| | |
+|---|---|
+| pair score (gen1) | **0.419**, 95% CI [0.370, 0.468], LOS 0.06% |
+| pentanomial LL / LD / DD / WD / WW | 69 / 2 / 88 / 7 / 34 |
+| games gen1 – release – draw | 163 – 228 – 9 |
+| think time / depth | gen1 263 ms, 2.57 · release 276 ms, 2.73 |
+
+The release net (4.2× the data) is clearly stronger: it takes 67% of the decisive pairs (69 LL vs 34 WW). Ordering at 10k: **release (hce-10k, 19.8M) > gen1 (4.7M) > hce-10k-part1_e6 (4.6M)**. Better data closes only part of a 4× size gap, so data volume is still the bigger lever at this scale. Plan: grow gen1 to ~20M (resume `gen1-10k-aws`) for a same-size gen1 vs release comparison, which also gives a second point on the size curve. Before that: gen1 vs part1_e6 again at 50k nodes.
+
+### Update (same day) — gen1 e6 vs hce-10k-part1_e6 @50k
+
+Same pair as the 10k match, 50k nodes, 8 games at once, 200 pairs (25m 07s).
+
+| | |
+|---|---|
+| pair score (gen1) | **0.591**, 95% CI [0.543, 0.640], LOS 99.99% |
+| pentanomial LL / LD / DD / WD / WW | 33 / 4 / 90 / 3 / 70 |
+| games gen1 – hce – draw | 233 – 160 – 7 |
+| think time / depth | gen1 1344 ms, 3.61 · hce 1441 ms, 3.71 |
+
+Up from 0.559 @10k (WW/LL 65/41 → 70/33, 61% → 68% of decisive pairs). The +0.033 change is inside the ~±0.07 noise on a difference of two 200-pair scores, so it's a hint that gen1's edge grows with search, not a result. Still searching ~0.1 ply shallower and winning. Next: gen1 vs the release net @50k — if gen1 loses *worse* there than at 10k (0.419), deeper search amplifies whichever eval is better overall; if it closes the gap, gen1's eval is relatively better in what deeper search reaches.
+
+### Update (same day) — gen1 e6 vs the release net @50k: the gap closes
+
+Same setup as the 10k release match, 50k nodes, 8 games at once, 200 pairs (25m 57s).
+
+| | |
+|---|---|
+| pair score (gen1) | **0.534**, 95% CI [0.485, 0.582], LOS 91.4% |
+| pentanomial LL / LD / DD / WD / WW | 40 / 8 / 92 / 5 / 55 |
+| games gen1 – release – draw | 207 – 180 – 13 |
+| think time / depth | gen1 1320 ms, 3.65 · release 1471 ms, 3.74 |
+
+**At 10k the release net beat gen1 0.419; at 50k gen1 is level or slightly ahead (0.534).** +0.115 is ~3 sd, well outside noise. Gen1 was trained on 4.7M rows vs the release net's 19.8M.
+
+| gen1 e6 vs | @10k | @50k | change |
+|---|---|---|---|
+| hce-10k-part1_e6 (4.6M HCE) | 0.559 | 0.591 | +0.033 (noise-level) |
+| hce-10k_e9 release (19.8M HCE) | 0.419 | 0.534 | **+0.115** |
+
+Reading: the release net's edge at 10k is breadth (4× the positions); with deeper search gen1's eval takes over. Plausible mechanism: HCE-data nets learned what wins when a weak player (HCE @10k) plays the position out, gen1 learned what wins under strong play — and deeper search makes both engines play more like the strong player, which is the regime gen1's labels describe. So gen1's eval gets relatively more accurate as search deepens. Next: 100k nodes (does gen1 pull clearly ahead?), optionally 400 pairs @50k to firm up "≥ release", then gen1 at ~20M.
