@@ -10,21 +10,34 @@ SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR    = os.path.join(SCRIPT_DIR, "data")
 WEIGHTS_DIR = os.path.join(SCRIPT_DIR, "weights")
 REPO_ROOT   = os.path.dirname(SCRIPT_DIR)
+RESULTS_DIR = os.path.join(REPO_ROOT, "results")
+
+
+def append_result(name, row):
+    """Append `row` (a dict) to results/<name>.csv, writing the header if the
+    file is new. The results/ tables are what the plots read."""
+    import csv
+    path = os.path.join(RESULTS_DIR, f"{name}.csv")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    new = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(row))
+        if new:
+            w.writeheader()
+        w.writerow(row)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # ── Board utilities ────────────────────────────────────────────────────────
 
+# Left-right flip within each row: sq (row, col) -> (row, 5-col).
+MIRROR_PERM = np.array([row * 6 + (5 - col) for row in range(6) for col in range(6)])
+
+
 def mirror_board(board_36):
     """Left-right flip within each row: sq (row, col) -> (row, 5-col)."""
-    mirrored = board_36.copy()
-    for row in range(6):
-        for col in range(3):
-            left  = row * 6 + col
-            right = row * 6 + (5 - col)
-            mirrored[left], mirrored[right] = board_36[right], board_36[left]
-    return mirrored
+    return board_36[MIRROR_PERM]
 
 
 # ── Dataset ────────────────────────────────────────────────────────────────
@@ -47,7 +60,8 @@ class Dataset:
     """
 
     def __init__(self, boards, outcomes, move_nums=None, game_ids=None):
-        self.boards    = np.asarray(boards,   dtype=np.int64)
+        # Squares are 0-3, so int8: 36 bytes a board (40M boards = 1.4 GB).
+        self.boards    = np.asarray(boards,   dtype=np.int8)
         self.outcomes  = np.asarray(outcomes, dtype=np.float32)
         self.move_nums = np.asarray(move_nums, dtype=np.int64) if move_nums is not None else None
         self.game_ids  = np.asarray(game_ids,  dtype=np.int64) if game_ids  is not None else None
@@ -67,24 +81,34 @@ class Dataset:
 
         Outcomes are scaled (default 0.75) to sit in Tanh's linear region.
         """
-        dfs = [pd.read_csv(f, header=None) for f in files]
-        ncols_per_file = [df.shape[1] for df in dfs]
+        ncols_per_file = [pd.read_csv(f, header=None, nrows=1).shape[1] for f in files]
         for n in ncols_per_file:
             if n not in (37, 39):
                 raise ValueError(f"Unexpected CSV column count: {n} (expected 37 or 39)")
 
         has_metadata = all(n == 39 for n in ncols_per_file)
-        if not has_metadata:
-            # Trim any 39-col files down to 37 before concat so we don't carry NaN-filled metadata
-            dfs = [df.iloc[:, :37] for df in dfs]
 
-        df = pd.concat(dfs, ignore_index=True)
-
-        boards    = df.iloc[:, :36].values.astype(np.int64)
-        outcomes  = df.iloc[:, 36].values.astype(np.float32) * outcome_scale
+        # Read one file at a time with small dtypes and keep only numpy arrays,
+        # so a 40M-row mix fits in RAM (default int64 frames would need ~12 GB).
+        dtypes = {i: np.int8 for i in range(37)}
         if has_metadata:
-            move_nums = df.iloc[:, 37].values.astype(np.int64)
-            game_ids  = df.iloc[:, 38].values.astype(np.int64)
+            dtypes.update({37: np.int32, 38: np.int64})
+        boards, outcomes, move_nums, game_ids = [], [], [], []
+        for f in files:
+            # Trim any 39-col files down to 37 if mixed with legacy files.
+            df = pd.read_csv(f, header=None, usecols=list(dtypes), dtype=dtypes)
+            boards.append(df.iloc[:, :36].to_numpy())
+            outcomes.append(df.iloc[:, 36].to_numpy().astype(np.float32) * outcome_scale)
+            if has_metadata:
+                move_nums.append(df.iloc[:, 37].to_numpy())
+                game_ids.append(df.iloc[:, 38].to_numpy())
+            del df
+
+        boards   = np.concatenate(boards)
+        outcomes = np.concatenate(outcomes)
+        if has_metadata:
+            move_nums = np.concatenate(move_nums)
+            game_ids  = np.concatenate(game_ids)
         else:
             move_nums = None
             game_ids  = None
@@ -113,9 +137,16 @@ class Dataset:
         wins   = int((self.outcomes > 0).sum())
         losses = int((self.outcomes < 0).sum())
         draws  = n - wins - losses
-        # Pandas drop_duplicates is hash-based and scales cleanly to 30M+ rows.
-        # Downcast to int8 (boards are 0-3) for 8× memory reduction.
-        unique = pd.DataFrame(self.boards.astype(np.int8)).drop_duplicates().shape[0]
+        # Pack each board into 72 bits (2 bits a square: 64 + 8) and dedupe the
+        # two packed columns; deduping all 36 columns needs ~10 GB at 60M rows.
+        lo = np.zeros(n, dtype=np.uint64)
+        for sq in range(32):
+            lo |= self.boards[:, sq].astype(np.uint64) << np.uint64(2 * sq)
+        hi = np.zeros(n, dtype=np.uint8)
+        for sq in range(32, 36):
+            hi |= self.boards[:, sq].astype(np.uint8) << np.uint8(2 * (sq - 32))
+        unique = n - int(pd.DataFrame({"lo": lo, "hi": hi}).duplicated().sum())
+        del lo, hi
         dupes  = n - unique
 
         print(f"\n{'-' * 50}")
@@ -248,7 +279,7 @@ class Dataset:
 
     def mirror_augment(self):
         """Return a new Dataset with each row plus its left-right mirror."""
-        mirrored = np.array([mirror_board(b) for b in self.boards])
+        mirrored = self.boards[:, MIRROR_PERM]
         boards   = np.vstack([self.boards, mirrored])
         outcomes = np.concatenate([self.outcomes, self.outcomes])
         if self.has_metadata:

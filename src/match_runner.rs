@@ -166,7 +166,64 @@ pub fn run_sprt_match(
     println!("  ── FINAL ─────────────────────────────────────────────────────────");
     print_summary_box(&summary);
 
+    append_results_row(&summary, &e1_schedules, &e2_schedules, thread_count);
     summary
+}
+
+/// Every finished match, one row each. Plots and tables read this instead of
+/// numbers copied out of ENGINE_HISTORY.
+const RESULTS_CSV: &str = "results/matches.csv";
+const RESULTS_HEADER: &str = "finished_utc,net_a,net_b,nodes_a,nodes_b,time_a,time_b,pairs,games,\
+pair_score,stderr,ci_lo,ci_hi,llr,los,ll,ld,dd,wd,ww,a_wins,b_wins,draws,\
+a_depth,b_depth,a_ms,b_ms,a_win_len,a_loss_len,draw_len,wall_s,games_at_once,note";
+
+fn append_results_row(s: &MatchSummary, a: &Schedules, b: &Schedules, games_at_once: usize) {
+    use std::io::Write;
+    let join = |v: &[u64]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(";");
+    let join32 = |v: &[u32]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(";");
+    let st = &s.sprt;
+    let (ci_lo, ci_hi) = st.score_ci_95();
+    // Average game length in moves (a's wins, a's losses, draws); blank if none.
+    let avg = |v: &[usize]| if v.is_empty() { String::new() } else { format!("{:.1}", v.iter().sum::<usize>() as f64 / v.len() as f64) };
+    let row = format!(
+        "{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.3},{:.4},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.1},{:.1},{},{},{},{},{},",
+        utc_now(), s.e1_name, s.e2_name, join(&a.nodes), join(&b.nodes), join32(&a.time), join32(&b.time),
+        st.n_pairs(), st.n_games(), st.mean(), st.stderr(), ci_lo, ci_hi, st.llr(), st.los(),
+        st.penta.ll, st.penta.ld, st.penta.dd, st.penta.wd, st.penta.ww,
+        st.e1_total_wins, st.e2_total_wins, st.draws_total,
+        s.e1_think.avg_depth(), s.e2_think.avg_depth(), s.e1_think.avg_ms(), s.e2_think.avg_ms(),
+        avg(&s.e1_win_moves), avg(&s.e2_win_moves), avg(&s.draw_moves),
+        st.elapsed().as_secs(), games_at_once,
+    );
+    let new = !std::path::Path::new(RESULTS_CSV).exists();
+    let _ = std::fs::create_dir_all("results");
+    match std::fs::OpenOptions::new().create(true).append(true).open(RESULTS_CSV) {
+        Ok(mut f) => {
+            if new { let _ = writeln!(f, "{}", RESULTS_HEADER); }
+            let _ = writeln!(f, "{}", row);
+            println!("  Result appended to {}", RESULTS_CSV);
+        }
+        Err(e) => println!("  Could not write {}: {}", RESULTS_CSV, e),
+    }
+}
+
+/// "YYYY-MM-DD HH:MM" in UTC, without pulling in a date crate.
+fn utc_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, rem / 3600, rem % 3600 / 60)
 }
 
 /// Pulls pair indices off the shared counter and plays each pair: two games on

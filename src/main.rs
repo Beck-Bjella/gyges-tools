@@ -22,11 +22,17 @@ pub struct EngineConfig {
 const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else { "./engines/gyges-v2.0.0" };
 
 fn main() {
-    // `gyges-tools datagen [dataset] [workers] [hours]` runs data gen with
+    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net]` runs data gen with
     // those overrides (for servers, no code edits needed).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("datagen") {
         run_data_gen(&args[1..]);
+        return;
+    }
+    // `gyges-tools sprt <net A> <net B> <nodes A> [nodes B]` runs one match
+    // with run_sprt's settings but these engines and node caps (for queued runs).
+    if args.first().map(String::as_str) == Some("sprt") {
+        run_sprt_cli(&args[1..]);
         return;
     }
 
@@ -52,23 +58,32 @@ fn run_sprt() {
     // ---- Engines under test ------------------------------------------
     // ENGINE_A is the "candidate" — H1 asks whether it scores ≥ h1_score.
     let engine_a = EngineConfig {
-        name: String::from("pair1024_gen1-10k+gen1-10k-aws_e6"),
+        name: String::from("pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9"),
         path: String::from(ENGINE_V2),
         init_commands: vec![
             String::from("setoption nn true"),
-            String::from("setoption weightsPath engines/weights/pair1024_gen1-10k+gen1-10k-aws_e6.bin"),
+            String::from("setoption weightsPath engines/weights/pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9.bin"),
             String::from("setoption threads 1"),
         ],
     };
-    // The release net, embedded in 2.0.0 (no weightsPath needed).
+    // HCE on the same engine. Baseline: the release net @10k vs HCE @100k = 0.462.
     let engine_b = EngineConfig {
-        name: String::from("pair1024_hce-10k_e9"),
+        name: String::from("HCE @100k"),
         path: String::from(ENGINE_V2),
         init_commands: vec![
-            String::from("setoption nn true"),
+            String::from("setoption nn false"),
             String::from("setoption threads 1"),
         ],
     };
+    // The release net, embedded in 2.0.0 (no weightsPath needed):
+    // let engine_b = EngineConfig {
+    //     name: String::from("pair1024_hce-10k_e9"),
+    //     path: String::from(ENGINE_V2),
+    //     init_commands: vec![
+    //         String::from("setoption nn true"),
+    //         String::from("setoption threads 1"),
+    //     ],
+    // };
     // Size-matched HCE-data net:
     // let engine_b = EngineConfig {
     //     name: String::from("pair1024_hce-10k-part1_e6"),
@@ -76,15 +91,6 @@ fn run_sprt() {
     //     init_commands: vec![
     //         String::from("setoption nn true"),
     //         String::from("setoption weightsPath engines/weights/pair1024_hce-10k-part1_e6.bin"),
-    //         String::from("setoption threads 1"),
-    //     ],
-    // };
-    // HCE on the same engine:
-    // let engine_b = EngineConfig {
-    //     name: String::from("HCE @200k"),
-    //     path: String::from(ENGINE_V2),
-    //     init_commands: vec![
-    //         String::from("setoption nn false"),
     //         String::from("setoption threads 1"),
     //     ],
     // };
@@ -97,9 +103,10 @@ fn run_sprt() {
         depth:     vec![30],       // ply cap per move
         time:      vec![120],      // seconds per move (hard cap; runner kills at 2x + 5s)
         randomize: vec![0],        // engine-side move randomization
-        nodes:     vec![50_000],   // node cap per move (0 = no cap)
+        nodes:     vec![10_000],   // node cap per move (0 = no cap)
     };
-    let b_schedules = a_schedules.clone();
+    // HCE gets 10x the nodes (same setup as the release-net baseline).
+    let b_schedules = Schedules { nodes: vec![100_000], ..a_schedules.clone() };
 
     // ---- SPRT parameters ---------------------------------------------
     // h1_score is the bar for "engine_a is meaningfully better."
@@ -126,6 +133,46 @@ fn run_sprt() {
     let _summary = run_sprt_match(engine_a, engine_b, sprt_cfg, a_schedules, b_schedules, thread_count, false);
 }
 
+/// An engine for `net`: a file name in engines/weights/ (no `.bin`),
+/// `release` (the net embedded in 2.0.0) or `hce` (no net).
+fn engine_for(net: &str, nodes: u64) -> EngineConfig {
+    let (name, nn) = match net {
+        "release" => (String::from("pair1024_hce-10k_e9"), vec![String::from("setoption nn true")]),
+        "hce" => (format!("HCE @{}k", nodes / 1000), vec![String::from("setoption nn false")]),
+        _ => (String::from(net), vec![
+            String::from("setoption nn true"),
+            format!("setoption weightsPath engines/weights/{net}.bin"),
+        ]),
+    };
+    if net != "release" && net != "hce" {
+        assert!(std::path::Path::new(&format!("engines/weights/{net}.bin")).exists(), "no net engines/weights/{net}.bin");
+    }
+    let mut init_commands = nn;
+    init_commands.push(String::from("setoption threads 1"));
+    EngineConfig { name, path: String::from(ENGINE_V2), init_commands }
+}
+
+fn run_sprt_cli(args: &[String]) {
+    let usage = "usage: gyges-tools sprt <net A> <net B> <nodes A> [nodes B]";
+    let (a, b) = (args.first().expect(usage), args.get(1).expect(usage));
+    let nodes_a: u64 = args.get(2).expect(usage).parse().expect("nodes must be a number");
+    let nodes_b: u64 = args.get(3).map_or(nodes_a, |n| n.parse().expect("nodes must be a number"));
+
+    // Same settings as run_sprt.
+    let schedules = |nodes| Schedules { depth: vec![30], time: vec![120], randomize: vec![0], nodes: vec![nodes] };
+    let sprt_cfg = SprtConfig {
+        h0_score: 0.500,
+        h1_score: 0.520,
+        alpha: 0.05,
+        beta:  0.05,
+        min_pairs: 16,
+        max_pairs: 200,
+        auto_stop_on_decision: false,
+    };
+    let _summary = run_sprt_match(engine_for(a, nodes_a), engine_for(b, nodes_b), sprt_cfg,
+                                  schedules(nodes_a), schedules(nodes_b), 8, false);
+}
+
 // =====================================================================
 //                         TRAINING DATA GENERATION
 // =====================================================================
@@ -145,15 +192,10 @@ fn run_data_gen(overrides: &[String]) {
     let dataset = overrides.first().map_or("gen1-10k", String::as_str);
 
     // ---- Engine -------------------------------------------------------
-    // 2.0.0 with its embedded net (pair1024_hce-10k_e9).
-    let engine = EngineConfig {
-        name: String::from("pair1024_hce-10k_e9"),
-        path: String::from(ENGINE_V2),
-        init_commands: vec![
-            String::from("setoption nn true"),
-            String::from("setoption threads 1"),
-        ],
-    };
+    // The player: 2.0.0 with its embedded net (pair1024_hce-10k_e9) unless a
+    // net from engines/weights/ is given (gen2 = played by a gen1-trained net).
+    let player = overrides.get(4).map_or("release", String::as_str);
+    let engine = engine_for(player, 0);
 
     // ---- Schedules ----------------------------------------------------
     // The node cap applies to the randomized opening moves too: uncapped,
@@ -162,7 +204,7 @@ fn run_data_gen(overrides: &[String]) {
         depth:     vec![60],         // effectively no depth cap
         time:      vec![5],          // 5 sec per move (safety cap)
         randomize: vec![1, 1, 0],    // randomize first two moves only
-        nodes:     vec![10_000],     // 10k nodes on every move
+        nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move
     };
 
     // ---- Run length ---------------------------------------------------

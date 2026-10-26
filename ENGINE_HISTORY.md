@@ -844,3 +844,349 @@ Same setup as the 10k release match, 50k nodes, 8 games at once, 200 pairs (25m 
 | hce-10k_e9 release (19.8M HCE) | 0.419 | 0.534 | **+0.115** |
 
 Reading: the release net's edge at 10k is breadth (4× the positions); with deeper search gen1's eval takes over. Plausible mechanism: HCE-data nets learned what wins when a weak player (HCE @10k) plays the position out, gen1 learned what wins under strong play — and deeper search makes both engines play more like the strong player, which is the regime gen1's labels describe. So gen1's eval gets relatively more accurate as search deepens. Next: 100k nodes (does gen1 pull clearly ahead?), optionally 400 pairs @50k to firm up "≥ release", then gen1 at ~20M.
+
+### Update (same day) — gen1 e6 vs the release net @100k (partial, 45 pairs)
+
+Stopped at 45 pairs (14m 21s, 8 games at once) for time. Pair score **0.500**, 95% CI [0.407, 0.593]; LL / LD / DD / WD / WW 9 / 1 / 24 / 3 / 8; games 43 – 43 – 4. Depth gen1 4.22 · release 4.34, ~3 s/move.
+
+Too few pairs to separate from the 50k result (0.534) — the CI is ±0.09 — but it's consistent with "level", and only just overlaps 10k's 0.419. So far: gen1 (4.7M) vs release (19.8M) = 0.419 @10k → 0.534 @50k → ~0.50 @100k. The gap closes past 10k and stays closed; no sign yet of gen1 pulling further ahead or the release net coming back. Needs the full 200 pairs to say more.
+
+### Update (same day) — gen1 grown to release size (gen1-10k-aws2)
+
+Resumed the stopped spot instance and ran a new dataset **`gen1-10k-aws2`** (same config, 190 workers) instead of appending to `gen1-10k-aws`, so the 4.35M that `pair1024_gen1-10k+gen1-10k-aws_e6` was trained on stays untouched and the size curve comes from dataset mixes. Rate ~3.6M/h (14.24M at 3h56m); stopped at **15,164,610 rows** (~4h12m). All gen1 data: 352,837 + 4,351,593 + 15,164,610 = **19,869,040**, within 0.5% of `hce-10k` (19.77M). Next: train `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2` with the release recipe and match it against the release net at 10k / 50k — the same-size data-source comparison.
+
+### Update (same day) — gen1 at release size beats the release net @10k
+
+Trained `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2` (19.87M rows, release recipe): train mirrored ~31.8M, 89% unique. Val 0.3593 (e1) → 0.3445 (e9) → 0.3443 (e11/e12, flat); train 0.3350 @ e9, train-val gap 0.0095 vs 0.028 for the 4.7M run — much less overfitting. Took **e9** (first epoch within 0.0002 of the best, same rule as the 4.7M e6 pick).
+
+Match vs `pair1024_hce-10k_e9` (19.77M HCE rows), 10k nodes, 1 thread, 8 games at once, 200 pairs (4m 04s):
+
+| | |
+|---|---|
+| pair score (gen1 19.9M) | **0.593**, 95% CI [0.544, 0.641], LOS 99.99% |
+| pentanomial LL / LD / DD / WD / WW | 33 / 6 / 85 / 6 / 70 |
+| games gen1 – release – draw | 231 – 157 – 12 |
+| think time / depth | gen1 220 ms, 2.50 · release 246 ms, 2.76 |
+
+**At equal data size, NN self-play data beats HCE data clearly** — gen1 takes 68% of decisive pairs, ~+65 Elo (from pair score), and does it searching a quarter ply shallower. This is the strongest net we have.
+
+Scaling (vs the release net @10k): gen1 4.7M = 0.419 (~−57 Elo) → gen1 19.9M = 0.593 (~+65 Elo): ~+120 Elo for 4.2× the data, so size is still paying off on gen1 too. Also means gen1 is now the strongest player at 10k → it can play gen2's data. Next: same match @50k.
+
+### Update (same day) — gen1 19.9M vs the release net @50k: SPRT passes
+
+Same pair, 50k nodes, 8 games at once, 200 pairs (20m 11s).
+
+| | |
+|---|---|
+| pair score (gen1 19.9M) | **0.640**, 95% CI [0.595, 0.685], LOS 100% — **H1 accepted** (LLR +5.00) |
+| pentanomial LL / LD / DD / WD / WW | 22 / 1 / 94 / 9 / 74 |
+| games gen1 – release – draw | 251 – 139 – 10 |
+| think time / depth | gen1 1041 ms, 3.62 · release 1160 ms, 3.76 |
+
+First SPRT pass of the gen1 work. gen1 takes 77% of decisive pairs (74 WW vs 22 LL), ~+100 Elo. Up from 0.593 @10k (+0.047, ~1.4 sd on the difference — same direction as the 4.7M net's 10k → 50k jump, but not significant on its own).
+
+gen1 vs the release net so far:
+
+| gen1 data | @10k | @50k |
+|---|---|---|
+| 4.7M | 0.419 | 0.534 |
+| 19.9M (size-matched) | 0.593 | **0.640** |
+
+Both rows rise from 10k to 50k. Same-size NN self-play data gives a clearly stronger net at both budgets, and the margin is bigger with deeper search. `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` is the new best net and the obvious player for gen2 data.
+
+### Update (same day) — gen1 19.9M vs the release net @100k: SPRT passes again
+
+Same pair, 100k nodes, 8 games at once, 200 pairs (42m 45s).
+
+| | |
+|---|---|
+| pair score (gen1 19.9M) | **0.6525**, 95% CI [0.604, 0.701], LOS 100% — **H1 accepted** (LLR +4.68) |
+| pentanomial LL / LD / DD / WD / WW | 25 / 8 / 74 / 6 / 87 |
+| games gen1 – release – draw | 254 – 132 – 14 |
+| think time / depth | gen1 2163 ms, 3.97 · release 2366 ms, 4.15 |
+
+~+109 Elo; gen1 takes 78% of WW+LL pairs (87 vs 25). Fewer DD than at 50k (74 vs 94) — more pairs are being decided, and most of them go gen1's way. Still a ~0.2 ply shallower search at the same node count.
+
+gen1 vs the release net:
+
+| gen1 data | @10k | @50k | @100k |
+|---|---|---|---|
+| 4.7M | 0.419 | 0.534 | ~0.50 (45 pairs) |
+| 19.9M (size-matched) | 0.593 (+65) | 0.640 (+100) | **0.6525 (+109)** |
+
+The size-matched row goes up at every budget. 50k → 100k is only +0.013 (~0.4 sd), so the trend is levelling off; 10k → 100k is +0.06 (~1.7 sd). So NN self-play data is at least as big a win with deeper search, and if anything bigger. 
+
+### Update (same day) — does it translate? gen1 19.9M @10k vs HCE @100k
+
+Same setup as the release-net baseline above (NN @10k vs HCE @100k, 1 thread each), 8 games at once, 200 pairs (16m 54s).
+
+| | |
+|---|---|
+| pair score (gen1 19.9M) | **0.5225**, 95% CI [0.474, 0.571], LOS 82% — SPRT inconclusive (LLR +0.41) |
+| pentanomial LL / LD / DD / WD / WW | 43 / 5 / 94 / 7 / 51 |
+| games gen1 – HCE – draw | 203 – 185 – 12 |
+| think time / depth | gen1 246 ms, 2.63 · HCE 1727 ms, 4.00 |
+| game length | gen1 wins avg 22.3, losses avg 17.8 |
+
+| vs HCE @100k | pair score | ≈ Elo | LL | WW |
+|---|---|---|---|---|
+| release net @10k (177 pairs) | 0.462 | −26 | 26.6% | 19.8% |
+| gen1 19.9M @10k | **0.5225** | +16 | 21.5% | 25.5% |
+
++0.06 over the release net's baseline, ~1.7 sd on the difference — positive, not significant alone. ~+42 Elo vs HCE against +65 head-to-head with the release net, so about two thirds of the gain carries over. gen1 at 10k now slightly beats HCE at 10× the nodes, which the release net didn't.
+
+The shape of the games is unchanged: losses are still the short ones (17.8 moves, same as the release net) — HCE's deeper search still finds the knockouts. The gain is more won-both pairs and fewer lost-both: gen1 wins more of the long positional games, it doesn't survive the tactics better. Running score sat around 0.53–0.54 for most of the match and finished at 0.5225 (normal swing at <100 pairs).
+
+## Overnight queue (2026-10-25) — code changes first
+
+Runs one thing at a time on the laptop (training and matches never overlap — 15.4 GB RAM, 8 GB GPU). All uncommitted; `git diff` against edaede4 shows everything.
+
+- **train_pair.py — trains 40M-row mixes in 8 GB.** Boards go to the GPU as int8 and are encoded a batch at a time on the GPU (`encode_batch`), replacing the up-front int16 index array (~200 B a position; 39.6M rows would need ~13 GB). The sum over active features doesn't depend on order, so the net computes the same thing. Every run first checks encode_batch against `encode_position` on 3,000 boards and exits on any mismatch. Measured on the 39.6M mix: GPU 5.9 / 8 GB, RAM peak 8.7 GB (loading), ~4.7 min an epoch for 63.4M train rows (the old code: ~3.2 min for 31.8M, plus a long Python encode up front).
+- **train_pair.py — other:** `hce-10k`, `-part1`, `-part2` now work inside a `+` mix (still read from the frozen archive, read-only). `DROPOUT` and `LR_DECAY` (1.0 = off) are settings at the top; runs stop after 3 epochs without a new best val (`patience`); each run folder gets `config.txt` and `log.txt`.
+- **common.py:** boards held as int8 (were int64), CSVs read one file at a time with small dtypes, mirror and duplicate count vectorized (duplicates counted on boards packed into 72 bits). Checked against the old code on gen1-10k: same boards, labels, game ids, mirrored boards and unique count (672,091).
+- **main.rs:** `gyges-tools sprt <net A> <net B> <nodes A> [nodes B]` runs one match with run_sprt's settings (200 pairs, 8 games at once, SPRT 0.50/0.52). A net is a file in engines/weights/ (no .bin), `release` or `hce`.
+- Smoke test (gen1-10k, deleted after): encoder check passed, stopped itself at e9.
+
+### Overnight 1 — hce-10k + gen1 (39.6M) trained; beats gen1 19.9M @10k
+
+Trained `pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2` (release recipe): 39.64M rows, 88.8% unique; 63.4M mirrored train (87.9% unique). Val 0.3794 (e1) → 0.3664 (e12) → 0.3663 (e14), creeping by ≤0.0001 an epoch, so I stopped it by hand after e14 instead of waiting for the 3-epoch rule. Took **e12** (first within 0.0002 of best). Train 0.3616 @ e12 — train-val gap 0.005, the smallest yet. Val set is half HCE games, so the number isn't comparable to gen1-only val (0.3445).
+
+Match vs `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9`, 10k nodes, 8 games at once, 200 pairs (4m 56s) — run with the new `gyges-tools sprt` command:
+
+| | |
+|---|---|
+| pair score (mix 39.6M) | **0.5875**, 95% CI [0.539, 0.636], LOS 99.98% (LLR +2.57, just short of the bound) |
+| pentanomial LL / LD / DD / WD / WW | 33 / 3 / 92 / 5 / 67 |
+| games mix – gen1 – draw | 231 – 161 – 8 |
+| think time / depth | mix 274 ms, 2.69 · gen1 277 ms, 2.66 |
+
+~+61 Elo over the previous best at 10k. Doubling the data with *weaker* labels still helps a lot at shallow search. 50k next (that's where HCE labels hurt before).
+
+### Overnight queue stopped — laptop slept
+
+The laptop was shut at ~2:30 a.m.; Windows slept at 02:32:46 (Kernel-Power 42), five minutes into the mix @50k match, and woke at 11:09. Nothing ran in between, so the dropout / lr-decay / move-num tests never started. The 50k match had 41 pairs at wake (~0.56); discarded and rerun from scratch, since the 8 games mid-move during sleep saw an 8 h gap.
+
+### Mix 39.6M vs gen1 19.9M @50k — the advantage disappears
+
+Same pair as Overnight 1, 50k nodes, 200 pairs (20m 33s):
+
+| | |
+|---|---|
+| pair score (mix 39.6M) | **0.495**, 95% CI [0.448, 0.542], LOS 42% (LLR −0.53) |
+| pentanomial LL / LD / DD / WD / WW | 46 / 4 / 100 / 8 / 42 |
+| games mix – gen1 – draw | 192 – 196 – 12 |
+| think time / depth | mix 1134 ms, 3.70 · gen1 1080 ms, 3.67 |
+
+| mix 39.6M vs gen1 19.9M | @10k | @50k |
+|---|---|---|
+| pair score | 0.5875 (+61) | **0.495** (−3) |
+
+−0.09 from 10k to 50k, ~2.7 sd on the difference — real. Adding the 19.8M HCE rows helps at shallow search and is worth nothing by 50k. Same direction as gen1 vs the release net, where HCE-label nets fall further behind with depth. Reading: the extra rows buy coverage (more positions seen), which matters when search is shallow; with deeper search the quality of the labels decides, and half of these labels come from weak HCE play. For later generations: don't stack HCE data in. Whether gen1 + gen2 stacks well is a separate question (gen1 labels are far better than HCE's). 100k running next.
+
+### Mix 39.6M vs gen1 19.9M @100k — still even
+
+Same pair, 100k nodes, 200 pairs (44m 32s):
+
+| | |
+|---|---|
+| pair score (mix 39.6M) | **0.5075**, 95% CI [0.459, 0.556], LOS 62% (LLR −0.08) |
+| pentanomial LL / LD / DD / WD / WW | 45 / 9 / 91 / 5 / 50 |
+| games mix – gen1 – draw | 196 – 190 – 14 |
+| think time / depth | mix 2361 ms, 4.13 · gen1 2299 ms, 4.04 |
+
+| mix 39.6M vs gen1 19.9M | @10k | @50k | @100k |
+|---|---|---|---|
+| pair score | 0.5875 (+61) | 0.495 | 0.5075 |
+
+Flat from 50k on: the mix isn't worse with deeper search, just no better. So the 19.8M HCE rows buy ~+60 Elo at 10k and nothing at ≥50k — they don't hurt, but they stop helping once search is deep enough. gen1 19.9M e9 stays the reference net for deep search; the mix is the better net only for shallow (10k) play, e.g. as a data-gen player at 10k nodes.
+
+### Do hce-10k and gen1 label the same boards differently? (analysis, no training)
+
+Script: scratchpad `label_conflict.py`. Boards canonicalized over the mirror; labels −1/0/+1 (unscaled). Each board's mean label in hce-10k compared with its mean label in gen1 19.9M. Baseline = the same comparison between two halves of one dataset (split by game id), which shows how much labels disagree from ordinary game-to-game noise.
+
+- **Shared boards: 487,640** (~2.8% of either set's 17.5M unique boards), but they carry ~12% of each set's rows, because nearly all of them are openings: 4,068 start boards (1.2M rows a side) and 365k boards after move 1 (1.0M rows a side). Past move 3 only ~62k boards / ~0.45% of rows are shared.
+- **Conflict vs noise:** cross-source mean |Δlabel| weighted 0.329, strong opposite labels (both |mean| ≥ 0.5, opposite sign) weighted 5.6%. Within-source baseline: hce 0.313 / 6.7%, gen1 0.299 / 6.4%. **So on shared boards hce and gen1 disagree about as much as two halves of the same dataset** — no conflict beyond game-outcome noise.
+- **One systematic shift:** gen1 sees a bigger first-mover edge. Start boards: mean label hce +0.078 vs gen1 +0.135; after move 1 (second mover to play): −0.071 vs −0.123. Mixing gives ~+0.11 / −0.10. Small.
+- Side finding: within one dataset, boards past move 8 shared by the two halves have identical labels (|Δ| ≈ 0.01) — duplicate games. After the 2 random opening moves play is deterministic (1 thread, node cap), so two games with the same random opening are the same game. ~1–2% of rows; also a val leak.
+
+**Reading:** direct label conflict isn't the problem — the two sources almost never contain the same position past the opening, and where they do they agree. The HCE half differs by *which* positions it covers (the ones HCE play reaches), not by labeling shared positions differently. That fits the match results: extra coverage helps at 10k and stops mattering at ≥50k. Not measured: conflict between *similar* (not identical) positions.
+
+**Standing after the mix tests:** strongest net on paper is the mix `pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_e12` (+61 Elo at 10k, even at 50k/100k — never worse). Reference / favorite stays `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9`: pure high-quality data, simpler story, equal at depth. Caveat on the mix: hce-10k is pre-2.0.0-rules data (~1% board-unchanged moves), so the mix also carries a rules confound.
+
+### Where things stand / plan (2026-10-25, for picking up in a new chat)
+
+- Label-conflict script moved into the repo: `training/label_conflict.py` (run `python training/label_conflict.py`; writes nothing).
+- Match logs for tonight's runs were in the session scratchpad only; every result is in the tables above. Matches are now one command: `gyges-tools sprt <net A> <net B> <nodes A> [nodes B]` (nets by file name in engines/weights/, or `release` / `hce`).
+- Nets in engines/weights/ added today: mix `…_e12` (main) and `…_e7` (epoch test).
+- Queue, one at a time: (1) mix e7 vs e12 @50k (running), (2) release @10k vs HCE @10k — strength gap between the two data-gen players, (3) mix with dropout 0.3 (`DROPOUT = 0.3`, `TAG = "drop0.3"`) → vs gen1 e9 @10k/50k, (4) gen1 19.9M with dropout 0.3 as the control → same matches. Reading: mix drop0.3 wins at 50k and the control doesn't → the net was capacity-limited by dropout; both win → dropout 0.5 was simply too high; neither → label quality explains the depth gap.
+- Later: lr decay (`LR_DECAY = 0.3`), `MIN_MOVE_NUM` 1–2 (drop start / random-opening boards), split train/val by game (val leaks ~95% of games), then gen2 data played by the best net — consider storing the search score per position for blended labels. Don't stack weaker generations at full weight (weight by generation instead).
+
+### Mix e7 vs mix e12 — the later epoch isn't worse
+
+`pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2` e7 (val 0.3678, train-val gap 0) vs e12 (0.3664, gap 0.005), 200 pairs each:
+
+| e7 vs e12 | pair score | 95% CI | LL / LD / DD / WD / WW |
+|---|---|---|---|
+| @10k | 0.501 | [0.455, 0.548] | 45 / 2 / 103 / 7 / 43 |
+| @50k | 0.4825 | [0.432, 0.533] | 56 / 6 / 82 / 8 / 48 |
+
+Even at 10k, e12 slightly ahead at 50k (within noise). At 40M rows the five extra epochs (train −0.0062, val −0.0014) didn't hurt play, so memorization isn't costing strength at this size and the "first epoch within 0.0002 of best val" pick stands for now. (On the 4.7M gen1 run val turned up at e7 — small sets are where early epochs matter.)
+
+### How much stronger is gen1's player than hce-10k's? Release net @10k vs HCE @10k
+
+The two data-gen players head to head at the node budget they generated with (equal 10k nodes), 200 pairs (2m 42s):
+
+| | |
+|---|---|
+| pair score (release net) | **0.854**, 95% CI [0.818, 0.890] (LLR +20.2) — **~+307 Elo** |
+| pentanomial LL / LD / DD / WD / WW | 7 / 0 / 42 / 5 / 146 |
+| games net – HCE – draw | 336 (of 400) won by the net · see log |
+| depth | net 2.42 · HCE 2.46 |
+| game length | net wins avg 15.1 moves, losses 18.8 |
+
+The net wins both games of 146 pairs and loses both of 7 — 95% of decisive pairs. So gen1 data was played by a player ~300 Elo stronger than hce-10k's, matching the estimate from the 100k/200k bracket (+250–350). Its wins are *short* here (15.1), unlike vs HCE @100k where it won the long games: at equal nodes it simply out-plays HCE tactically too. This is the "data-gen player strength" number for the paper; measure gen1 19.9M e9 @10k vs the release net @10k the same way for gen2's player (= 0.593 already, ~+65).
+
+Correction to the table above: games net – HCE – draw = **339 – 56 – 5** (84.8% / 14.0% / 1.2%). The "336" line was written before I'd read the game counts.
+
+### Mix with dropout 0.3 — stopped at e8 (laptop battery)
+
+`pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_drop0.3` (only change from the e12 run: `DROPOUT = 0.3`). Stopped by hand after e8 because the laptop was nearly out of battery (GPU training drains it); e1–e8 saved.
+
+| epoch | drop0.3 train | drop0.3 val | drop0.5 val (same epoch) |
+|---|---|---|---|
+| 1 | 0.3887 | 0.3765 | 0.3794 |
+| 2 | 0.3757 | 0.3715 | 0.3746 |
+| 3 | 0.3697 | 0.3693 | 0.3719 |
+| 4 | 0.3652 | 0.3681 | 0.3703 |
+| 5 | 0.3617 | 0.3675 | 0.3692 |
+| 6 | 0.3587 | 0.3674 | 0.3685 |
+| 7 | 0.3562 | 0.3672 | 0.3678 |
+| 8 | 0.3539 | 0.3672 | 0.3672 |
+
+Faster to start, then flat at ~0.3672 from e7 while drop0.5 kept going to 0.3663 (e14). Train-val gap at e8: 0.013 (drop0.5: 0.0009) — overfits much sooner. On val, less dropout reaches a slightly *worse* floor, so no sign yet that 0.5 was holding the net back. Not matched yet: next is e7 (best val so far) vs gen1 e9 @10k/50k; val leaks, so the matches decide. Possibly worth trying drop0.3 + `LR_DECAY` if it's flat because of lr noise.
+
+Also added `training/feature_counts.py` (examples per feature). gen1 19.9M: 78 active features a board, median ~184k examples per feature, rarest possible feature ~54k; 108 features are impossible (cross-type pair on one square) and never fire. Per-feature coverage isn't the limit; more data helps by covering more feature *combinations*.
+
+### Mix drop0.3 (e7) vs gen1 19.9M e9 — less dropout loses the 10k gain
+
+Net `pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_drop0.3_e7` (best val so far when stopped, 0.3672), 200 pairs each, 8 games at once:
+
+| vs gen1 e9 | pair score | 95% CI | LL / LD / DD / WD / WW | games W–L–D |
+|---|---|---|---|---|
+| @10k | 0.490 | [0.440, 0.540] | 53 / 7 / 83 / 9 / 48 | 187 – 195 – 18 |
+| @50k | 0.504 | [0.457, 0.550] | 40 / 12 / 99 / 3 / 46 | 194 – 191 – 15 |
+
+| mix vs gen1 e9 | @10k | @50k |
+|---|---|---|
+| dropout 0.5 (e12) | **0.5875** | 0.495 |
+| dropout 0.3 (e7) | 0.490 | 0.504 |
+
+At 10k dropout 0.3 is ~0.10 worse (~2.8 sd) — it loses the mix's whole +61 Elo. Not the epoch: drop0.5 e7 played even with its e12 (0.501). At 50k both are even with gen1. So **dropout 0.5 isn't the bottleneck — it's what lets the net use the noisier HCE half**; with 0.3 it overfits that noise (train-val gap 0.013 vs 0.0009) and the extra coverage stops helping. The depth gap is label quality, not regularization. Keep dropout 0.5. Skipped the planned gen1 drop0.3 control: with the mix result this clear, it can't change the decision.
+
+### results/ tables + figures (no more copying numbers by hand)
+
+New `results/` folder (see `results/README.md`): `matches.csv` (one row per finished match — the runner appends it itself now), `runs.csv` + `epochs.csv` (train_pair.py writes the config at start and a row per epoch: dropout, lr, lr_decay, batch, patience, filters, train/val), `datasets.csv` (who played, nodes, generation). Backfilled 19 matches from the summary boxes in the session transcript and the match logs (parsed, not retyped; every pentanomial sums to its pair count), the HCE @200k match from its table above, and 6 runs / 42 epoch rows.
+
+`python training/plots.py` → `results/figures/`: `score_vs_nodes` (head-to-head score vs budget), `scaling` (Elo vs release net against training rows, one panel per budget — the paper figure; points with no direct match are chained through one net and drawn hollow), `training_curves`, `player_strength` (data-gen player ladder: release @10k = +307 over HCE @10k, gen1 19.9M @10k = +372).
+
+Also: `datagen` takes an optional 4th argument, nodes (default 10k). Laptop rate at 12 workers: 10k nodes 129k rows/h, 1k nodes 1.21M rows/h (9.4× — nearly all time is search, no tooling overhead worth fixing). 1k nodes searches ~1.0 ply early, ~1.9 ply from move 11.
+
+### Mix @10k vs HCE @200k — even with 20× the nodes
+
+`pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_e12` @10k vs HCE @200k, 200 pairs (42m 29s). First row the runner wrote to results/matches.csv itself.
+
+| | |
+|---|---|
+| pair score (mix) | **0.489**, 95% CI [0.438, 0.539] |
+| pentanomial LL / LD / DD / WD / WW | 53 / 8 / 84 / 5 / 50 |
+| games mix – HCE – draw | 189 – 198 – 13 |
+| think time / depth | mix 302 ms, 2.59 · HCE 4393 ms, 4.28 |
+| game length | mix wins 23.0, losses 19.1 |
+
+Release net @10k vs HCE @200k was 0.341. The mix at 10k plays even with HCE at 20× the nodes, thinking 14× less per move and 1.7 ply shallower; chained Elo predicted ~0.50–0.53, so chaining holds. Same shape as always: NN wins the long games, HCE the short tactical ones.
+
+New headline metric — **HCE-node equivalent**: the HCE node budget a net @10k scores 50% against. Release net ≈ 80–90k (0.462 @100k, 0.341 @200k); mix ≈ 200k. gen1 19.9M: 0.5225 @100k, @200k running.
+
+Also: matches.csv gained `a_win_len, a_loss_len, draw_len` (average game length for a's wins, a's losses, draws), filled in for the old rows from the same summary boxes.
+
+### gen1 19.9M @10k vs HCE @200k — HCE-node equivalents
+
+gen1 19.9M e9 @10k vs HCE @200k, 200 pairs (41m 34s): **0.4575**, 95% CI [0.411, 0.504]; LL / LD / DD / WD / WW 52 / 8 / 97 / 8 / 35; games 175 – 209 – 16; depth 2.62 vs 4.34; gen1 wins avg 23.7 moves, losses 18.6.
+
+| net @10k | vs HCE @100k | vs HCE @200k | HCE-node equivalent (50% point) |
+|---|---|---|---|
+| release net (HCE data 19.8M) | 0.462 | 0.341 | **≈83k** |
+| gen1 19.9M | 0.5225 | 0.4575 | **≈127k** |
+| mix 39.6M | — | 0.489 | ≈185k (one point; assumes the same slope) |
+
+50% point = Elo interpolated linearly in log2(HCE nodes) between the two budgets. Each data step made the net's eval worth more HCE search: 8× → ~13× → ~19× its own 10k nodes. New chart `results/figures/hce_equivalent`, plus `strength_{10k,50k,100k}`: every net on one chart, one rating per net fitted jointly from all net-vs-net matches at that budget (weighted least squares on Elo differences, release net = 0), lines joining nets of the same data family.
+
+### gen0 4.6M (part1 e6) vs the release net, direct — and gen1-1k data gen started
+
+First direct matches of `pair1024_hce-10k-part1_e6` vs the release net (equal nodes, 200 pairs each; rows written by the runner):
+
+| part1 e6 vs release | pair score | 95% CI | LL / LD / DD / WD / WW | games W–L–D |
+|---|---|---|---|---|
+| @10k | 0.371 | [0.324, 0.419] | 78 / 5 / 86 / 4 / 27 | 144 – 247 – 9 |
+| @50k | 0.406 | [0.359, 0.453] | 65 / 9 / 92 / 4 / 30 | 156 – 231 – 13 |
+
+The joint rating fit had predicted 0.363 / 0.441 — within error. Equal size, different source (~5M rows): gen0 0.371 / 0.406 vs gen1 0.419 / 0.534 at 10k / 50k — gen1's lead grows with depth, same as at 20M. The golden chart (`vs_release_by_budget`) now has gen0 4.6M measured at 10k and 50k.
+
+Started **`gen1-1k`** on the laptop: release net plays (so gen1, same player as gen1-10k), 1k nodes every move incl. the random openers, 12 workers: `datagen gen1-1k 12 6 1000`. Stopping at ~4.7M rows to size-match gen1 4.7M. Plan after: train → match vs release @10k/50k → player check (new net @1k vs release @1k) → gen2-1k played by the gen1-1k net (a pure 1k iteration loop).
+
+### gen1-1k: same player, 10× fewer data-gen nodes — flat with depth
+
+Data: `gen1-1k`, 4,733,829 rows (92.4% unique, 271k games, 17.4 positions/game), release net @1k nodes every move, laptop 12 → 15 workers (15 workers 1.36M rows/h vs 12 at 1.27M; ~3.5 h; rate dipped to ~1.25M/h on a weak charger). Net: `pair1024_gen1-1k`, release recipe, stopped itself at e9; took **e5** (val 0.4182, best 0.4181 @ e6). gen1 4.7M (10k-node games) reached val 0.3539 — different val set, but 1k-game results are clearly much harder to predict from the position.
+
+Matches vs the release net (equal nodes, 200 pairs each, rows written by the runner):
+
+| ~4.7M rows of… | @10k | @50k |
+|---|---|---|
+| HCE @10k games (part1 e6) | 0.371 | 0.406 |
+| **release net @1k games (gen1-1k e5)** | **0.399** [0.353, 0.444] | **0.391** [0.344, 0.439] |
+| release net @10k games (gen1 4.7M e6) | 0.419 | 0.534 |
+
+At 10k the 1k data is nearly as good as the 10k data (−0.02, ~0.6 sd). At 50k it's at HCE-data level, 0.14 below the 10k data (~4 sd) — the only line on the golden chart that doesn't rise with depth. So data-gen search depth still matters with the net playing: 1k games are decided by later mistakes often enough that labels are noisy, and a net trained on noisy labels doesn't gain from deeper search (same as the HCE half of the mix). Third case of the same rule: noisy labels help shallow search, not deep. Drops the pure-1k iteration loop. Open: where between 1k and 10k (and above 10k — never tested) label quality saturates; next cheap point is 3k nodes (~1.3 h locally for 4.7M rows).
+
+### Mix 39.6M vs the release net, direct — and the joint rating fit
+
+`pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_e12` vs the release net, equal nodes, 200 pairs each:
+
+| | pair score | 95% CI | LL / LD / DD / WD / WW | games W–L–D |
+|---|---|---|---|---|
+| @10k | 0.645 | [0.600, 0.690] | 22 / 3 / 87 / 13 / 75 | 250 – 134 – 16 |
+| @50k | 0.674 | [0.630, 0.718] | 17 / 3 / 88 / 8 / 84 | 264 – 125 – 11 |
+
+Fit had predicted 0.674 / 0.635 — within error. Against the release net the mix scores a bit above gen1 19.9M at 50k (0.674 vs 0.640, ~0.9 sd), but head-to-head it was even (0.495); possibly a small style effect (half its data is HCE games like the release net's). Joint rating fit over all net-vs-net matches (Elo vs release net):
+
+| | @10k | @50k | @100k |
+|---|---|---|---|
+| gen0 4.6M (part1 e6) | −94 | −58 | |
+| gen1-1k 4.7M | −71 | −77 | |
+| gen1 4.7M | −55 | +15 | |
+| gen1 19.9M | +57 | +110 | +109 |
+| mix 39.6M | +111 | +116 | +115 |
+
+Mix ≈ +54 over gen1 at 10k, level at depth (+6). Golden chart and `score_vs_rows` now have the mix measured, not fitted. New chart `score_vs_rows`: score vs release net against training rows, one panel per match budget, color = generation, marker = data-gen nodes; the golden chart now finds every net automatically (one epoch per run, variants left out) with the same encodings.
+
+### Data quality follows the data-gen player's strength
+
+Worker test (laptop 8 cores / 16 threads, 10k nodes, ~3.7 min each): 12 workers 142k rows/h, 16 → 151k, 20 → 151k, 24 → 156k (noise). Throughput stops at one worker per hardware thread; on the AWS c8a (192 cores, no SMT) 190 workers was already the max. Laptop default now 16. `datagen` gained a 5th argument, the player net (`release` default, or a file in engines/weights/).
+
+Player-strength matches (200 pairs each; release @20k vs @10k started and dropped):
+
+| | pair score | ≈ Elo |
+|---|---|---|
+| release @1k vs release @10k | 0.136 [0.105, 0.167] | −320 |
+| gen1 19.9M e9 @1k vs release @1k | 0.590 [0.542, 0.638] | +63 |
+
+Ladder of data-gen players (HCE @10k = 0) next to how good their data was (net trained on ~4.7M rows, vs release @50k):
+
+| player | strength | data → net @50k |
+|---|---|---|
+| HCE @10k (hce-10k-part1) | 0 | 0.406 |
+| release @1k (gen1-1k) | ≈ −13 | 0.391 |
+| gen1 e9 @1k (gen2-1k, generating on AWS) | ≈ +50 | ? |
+| release @10k (gen1-10k) | +307 | 0.534 |
+
+The release net at 1k plays as well as HCE at 10k, and its data was as good as HCE's — two very different players of equal strength gave equal-quality data. Data quality looks like a function of player strength alone, whatever makes the player strong (eval or search). The generation step is the same size at 1k as at 10k (+63 vs +65). If gen2-1k lands slightly above gen1-1k, nodes vs generations can be priced on one Elo-of-the-player scale.
