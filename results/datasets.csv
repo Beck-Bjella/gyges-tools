@@ -1,0 +1,8 @@
+dataset,rows,player,player_nodes,generation,rules,location,note
+hce-10k-part1,4571787,HCE,10000,0,pre-2.0.0,V2.0.0_release_dataset/hce_10kn.csv,frozen release archive
+hce-10k-part2,15201910,HCE,10000,0,pre-2.0.0,V2.0.0_release_dataset/hce_10kn_big.csv,frozen release archive; game ids overlap part1
+gen1-10k,352837,pair1024_hce-10k_e9,10000,1,2.0.0,training/data/gen1-10k/,laptop 12 workers 2026-10-23
+gen1-10k-aws,4351593,pair1024_hce-10k_e9,10000,1,2.0.0,training/data/gen1-10k-aws/,AWS c8a.48xlarge 190 workers 2026-10-24
+gen1-10k-aws2,15164610,pair1024_hce-10k_e9,10000,1,2.0.0,training/data/gen1-10k-aws2/,AWS c8a.48xlarge 190 workers 2026-10-24
+gen1-1k,4733829,pair1024_hce-10k_e9,1000,1,2.0.0,training/data/gen1-1k/,laptop 12 then 15 workers 2026-10-25; same player as gen1-10k at 10x fewer nodes
+gen2-10k-aws,4852079,pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9,10000,2,2.0.0,training/data/gen2-10k-aws/,AWS c8a.48xlarge 190 workers 2026-10-26; first gen2 data

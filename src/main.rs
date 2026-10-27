@@ -1,7 +1,9 @@
 mod board;
+mod children;
 mod data_gen;
 mod game;
 mod match_runner;
+mod relabel;
 mod sprt;
 mod ugi_engine;
 
@@ -33,6 +35,17 @@ fn main() {
     // with run_sprt's settings but these engines and node caps (for queued runs).
     if args.first().map(String::as_str) == Some("sprt") {
         run_sprt_cli(&args[1..]);
+        return;
+    }
+    // `gyges-tools children <in.csv> <out.csv>` lists every legal next position.
+    if args.first().map(String::as_str) == Some("children") {
+        children::run(&args[1..]);
+        return;
+    }
+    // `gyges-tools relabel <dataset> <out_dataset> <workers> <nodes> [net]` writes a copy
+    // of a dataset with every position's search result appended.
+    if args.first().map(String::as_str) == Some("relabel") {
+        relabel::run(&args[1..]);
         return;
     }
 
@@ -133,9 +146,19 @@ fn run_sprt() {
     let _summary = run_sprt_match(engine_a, engine_b, sprt_cfg, a_schedules, b_schedules, thread_count, false);
 }
 
+/// Dev build of 2.0.0 that also reads nets with a 1024→32→1 tail (GygesRust branch dev-tail).
+const ENGINE_DEV: &str = if cfg!(windows) { "./engines/gyges-dev-x32.exe" } else { "./engines/gyges-dev-x32" };
+
 /// An engine for `net`: a file name in engines/weights/ (no `.bin`),
-/// `release` (the net embedded in 2.0.0) or `hce` (no net).
+/// `release` (the net embedded in 2.0.0) or `hce` (no net). A `dev:` prefix runs it
+/// on the dev build instead of 2.0.0 (needed for tail nets).
 fn engine_for(net: &str, nodes: u64) -> EngineConfig {
+    if let Some(rest) = net.strip_prefix("dev:") {
+        let mut e = engine_for(rest, nodes);
+        e.path = String::from(ENGINE_DEV);
+        e.name = format!("{} (dev)", e.name);
+        return e;
+    }
     let (name, nn) = match net {
         "release" => (String::from("pair1024_hce-10k_e9"), vec![String::from("setoption nn true")]),
         "hce" => (format!("HCE @{}k", nodes / 1000), vec![String::from("setoption nn false")]),
@@ -153,10 +176,12 @@ fn engine_for(net: &str, nodes: u64) -> EngineConfig {
 }
 
 fn run_sprt_cli(args: &[String]) {
-    let usage = "usage: gyges-tools sprt <net A> <net B> <nodes A> [nodes B]";
+    let usage = "usage: gyges-tools sprt <net A> <net B> <nodes A> [nodes B] [pairs]";
     let (a, b) = (args.first().expect(usage), args.get(1).expect(usage));
     let nodes_a: u64 = args.get(2).expect(usage).parse().expect("nodes must be a number");
     let nodes_b: u64 = args.get(3).map_or(nodes_a, |n| n.parse().expect("nodes must be a number"));
+    // 200 pairs ≈ ±0.05 on the score; 4× the pairs halves that.
+    let max_pairs: usize = args.get(4).map_or(200, |p| p.parse().expect("pairs must be a number"));
 
     // Same settings as run_sprt.
     let schedules = |nodes| Schedules { depth: vec![30], time: vec![120], randomize: vec![0], nodes: vec![nodes] };
@@ -166,7 +191,7 @@ fn run_sprt_cli(args: &[String]) {
         alpha: 0.05,
         beta:  0.05,
         min_pairs: 16,
-        max_pairs: 200,
+        max_pairs,
         auto_stop_on_decision: false,
     };
     let _summary = run_sprt_match(engine_for(a, nodes_a), engine_for(b, nodes_b), sprt_cfg,

@@ -96,10 +96,15 @@ def net_info(net, runs, data):
     if not len(r):
         return None
     r = r.iloc[0]
-    parts = r.dataset.split("+")
+    parts = [p.split("@")[0] for p in r.dataset.split("+")]   # "name@N" = subset of name
     gens = sorted({int(data[data.dataset == p].generation.iloc[0]) if p in set(data.dataset)
                    else (0 if p.startswith("hce") else 1) for p in parts})
-    source = {(0,): "HCE data (gen0)", (1,): "gen1 self-play", (0, 1): "HCE + gen1 mix"}.get(tuple(gens), "other")
+    if gens == [0]:
+        source = "HCE data (gen0)"
+    elif len(gens) == 1:
+        source = f"gen{gens[0]} self-play"
+    else:
+        source = ("HCE + " if 0 in gens else "") + " + ".join(f"gen{g}" for g in gens if g) + " mix"
     # Data-gen node budget of every part (hce-10k itself is the two archive parts).
     known = dict(zip(data.dataset, data.player_nodes))
     nodes = sorted({int(known.get(p, known.get(p + "-part1", 0))) for p in parts})
@@ -316,7 +321,8 @@ def fig_strength(m, runs, data, nodes):
 
 # Golden chart encodings: color = generation of the data, marker = data-gen nodes,
 # line style = data size. Colors stay fixed per generation as new ones are added.
-GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[6], "gen4": SERIES[4]}
+GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[5], "gen4": SERIES[4],
+              "mix gen0+gen1": INK2, "mix gen1+gen2": SERIES[6]}
 NODE_MARKERS = {1_000: "^", 3_000: "s", 10_000: "o", 30_000: "D"}
 
 
@@ -330,13 +336,14 @@ def size_style(rows):
 
 def golden_nets(m, runs, data):
     """Every net with matches, one epoch per run (the one with the most matches),
-    training variants (non-default dropout) left out."""
+    training variants (a run TAG, e.g. _drop0.3 or _nosingle) left out."""
     nets = {n for n in set(m.net_a) | set(m.net_b) if n.startswith("pair")}
     n_matches = lambda net: int(((m.net_a == net) | (m.net_b == net)).sum())
+    dataset_of = dict(zip(runs.run, runs.dataset))
     best = {}
     for net in nets:
         info = net_info(net, runs, data)
-        if not info or (info["dropout"] == info["dropout"] and info["dropout"] != 0.5):
+        if not info or info["run"] != f"pair1024_{dataset_of[info['run']]}":
             continue
         if info["run"] not in best or n_matches(net) > n_matches(best[info["run"]]):
             best[info["run"]] = net
@@ -344,7 +351,7 @@ def golden_nets(m, runs, data):
     known = data.set_index("dataset")
     for run, net in best.items():
         info = net_info(net, runs, data)
-        parts = runs[runs.run == run].iloc[0].dataset.split("+")
+        parts = [p.split("@")[0] for p in runs[runs.run == run].iloc[0].dataset.split("+")]
         parts = sum((["hce-10k-part1", "hce-10k-part2"] if p == "hce-10k" else [p] for p in parts), [])
         gens = sorted({int(known.generation[p]) for p in parts if p in known.index})
         nodes = sorted({int(known.player_nodes[p]) for p in parts if p in known.index})
@@ -668,47 +675,149 @@ def fig_player_strength(m):
     save(fig, "player_strength")
 
 
-def fig_data_quality(m, runs, data):
-    """Each dataset as a point: how strong its player was (x) vs how strong a net
-    trained on ~5M rows of it is against the release net (y). One panel per budget."""
+SIZE_BANDS = [  # (upper rows, label, line style) — nets of similar size are joined by a line
+    (7e6, "~5M", (0, (1, 2))),
+    (15e6, "~10M", (0, (5, 3))),
+    (30e6, "~20–25M", "-"),
+    (1e12, "~40M", (0, (7, 2, 1, 2))),
+]
+
+
+def data_quality(m, runs, data, net, rows):
+    """Row-weighted average strength of the players that made a net's data, or None."""
     ladder = player_ladder(m)
     known = data.set_index("dataset")
+    parts = runs[runs.run == net.rsplit("_e", 1)[0]].iloc[0].dataset.split("+")
+    parts = sum((["hce-10k-part1", "hce-10k-part2"] if p == "hce-10k" else [p] for p in parts), [])
+    full = {p: int(known.rows[p]) for p in parts if "@" not in p and p in known.index}
+    subset = [p for p in parts if "@" in p]
+    weights = dict(full)
+    for p in subset:                        # "name@N": whatever rows the full parts don't explain
+        weights[p] = max(rows - sum(full.values()), 0) // len(subset)
+    tot, elo_sum, se_sum = 0, 0.0, 0.0
+    for p, w in weights.items():
+        base = p.split("@")[0]
+        if base not in known.index:
+            return None
+        key = (known.player[base], int(known.player_nodes[base]))
+        if key not in ladder:
+            return None
+        e, se = ladder[key]
+        tot += w
+        elo_sum += w * e
+        se_sum += w * se
+    return (elo_sum / tot, se_sum / tot) if tot else None
+
+
+def fig_data_quality(m, runs, data):
+    """Size and quality on one chart: x = how strong the player(s) behind a net's data were
+    (row-weighted for mixes), y = the net vs the release net. Color = generation, marker =
+    data-gen nodes, and nets of similar size are joined by a line (style = size band)."""
     pts = []
     for d in golden_nets(m, runs, data):
-        if d["rows"] > 10e6 or d["net"] == RELEASE:
-            continue
-        parts = runs[runs.run == d["net"].rsplit("_e", 1)[0]].iloc[0].dataset.split("+")
-        players = {(known.player[p], int(known.player_nodes[p])) for p in parts if p in known.index}
-        if len(players) != 1:
-            continue
-        key = players.pop()
-        if key not in ladder:
-            continue
-        pts.append((d, key, *ladder[key]))
+        q = data_quality(m, runs, data, d["net"], d["rows"])
+        if q:
+            pts.append((d, *q))
     budgets = [10_000, 50_000]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.4), sharey=True)
+    fits = {n: fit_ratings(m, n) for n in budgets}
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 5), sharey=True)
     for ax, n in zip(axes, budgets):
-        for d, key, pe, pse in pts:
-            dd = direct(m, d["net"], RELEASE, n)
-            if not dd:
-                continue
+        placed = []
+        for d, qe, qse in pts:
+            if d["net"] == RELEASE:
+                s, se, meas = 0.5, 0.0, True
+            else:
+                dd = direct(m, d["net"], RELEASE, n)
+                if dd:
+                    (s, se), meas = dd, True
+                elif d["net"] in fits[n]:
+                    r, rse = fits[n][d["net"]]
+                    s = 1 / (1 + 10 ** (-r / 400))
+                    se, meas = rse * math.log(10) / 400 * s * (1 - s), False
+                else:
+                    continue
+            placed.append((d, qe, qse, s, se, meas))
+        for upper, label, style in SIZE_BANDS:
+            lo = max([0] + [u for u, _, _ in SIZE_BANDS if u < upper])
+            band = sorted((p for p in placed if lo <= p[0]["rows"] < upper), key=lambda p: p[1])
+            if len(band) > 1:
+                ax.plot([p[1] for p in band], [p[3] for p in band], color=INK2, linewidth=1.2,
+                        linestyle=style, zorder=1, label=f"{label} rows")
+            elif band:
+                ax.plot([], [], color=INK2, linewidth=1.2, linestyle=style, label=f"{label} rows")
+        for d, qe, qse, s, se, meas in placed:
             color = GEN_COLORS.get(d["gen"], INK2)
             marker = NODE_MARKERS.get(d["nodes"], "o")
-            ax.errorbar(pe, dd[0], xerr=1.96 * pse, yerr=1.96 * dd[1], fmt=marker, color=color,
-                        markersize=9, capsize=3, elinewidth=1, zorder=3)
-            ax.annotate(f"{d['gen']} @{key[1] // 1000}k\n({player_label(*key)})", (pe, dd[0]),
-                        xytext=(8, -4) if d["nodes"] != 1_000 else (-8, -4), textcoords="offset points",
-                        fontsize=8, color=INK2, va="top", ha="left" if d["nodes"] != 1_000 else "right")
+            ax.errorbar(qe, s, xerr=1.96 * qse if qse else None, yerr=1.96 * se if se else None,
+                        fmt=marker, color=color, markersize=9, capsize=3, elinewidth=1, zorder=3,
+                        markerfacecolor=color if meas else SURFACE, markeredgewidth=2)
+            ax.annotate(f"{d['rows'] / 1e6:.1f}M", (qe, s), xytext=(7, 5), textcoords="offset points",
+                        fontsize=8, color=INK2)
         ax.axhline(0.5, color=INK2, linewidth=1, linestyle=(0, (4, 3)))
         ax.set_title(f"net matched at {n // 1000}k nodes", loc="left")
         ax.set_xlabel("data-gen player strength (Elo vs HCE @10k)")
-        ax.set_xlim(-200, 420)
+        ax.set_xlim(-60, 420)
     axes[0].set_ylabel("trained net vs release net (pair score)")
-    fig.text(0.02, -0.05, "Each point = one ~5M-row dataset. Color = generation, marker = data-gen nodes "
-             "(● 10k, ▲ 1k). If data quality follows player strength, the points line up.",
+    # Two legends: size bands (lines) and what the colors / markers mean.
+    size_handles, size_labels = axes[1].get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    gens = sorted({d["gen"] for d, *_ in pts})
+    keys = [Line2D([], [], color=GEN_COLORS.get(g, INK2), marker="o", linestyle="", markersize=8, label=g)
+            for g in gens]
+    keys += [Line2D([], [], color=INK, marker=NODE_MARKERS[k], linestyle="", markersize=8, markerfacecolor=SURFACE,
+                    markeredgewidth=1.5, label=f"{k // 1000}k-node games") for k in (10_000, 1_000)]
+    fig.legend(handles=keys + size_handles, labels=[k.get_label() for k in keys] + [f"line: {l}" for l in size_labels],
+               loc="upper left", bbox_to_anchor=(0.02, -0.02), ncol=6, fontsize=8.5)
+    fig.text(0.02, -0.14, "Moving along a line = better data at the same size; moving between lines = more data. "
+             "Labels = training rows. Mixes use the row-weighted average player. Hollow = from the rating fit.",
              fontsize=8.5, color=INK2)
-    fig.suptitle("Data quality vs the strength of the player that made it", x=0.02, ha="left", fontweight="bold")
+    fig.suptitle("Data quality and data size together", x=0.02, ha="left", fontweight="bold")
     save(fig, "data_quality_vs_player")
+
+
+def fig_predict_vs_rank(dataset="gen2-10k-aws"):
+    """Predicting results (R², phase_analysis.py) vs ranking moves (move agreement,
+    move_agreement.py) by game phase, for the same nets on the same unseen data."""
+    p_path = os.path.join(RESULTS_DIR, f"phase_{dataset}.csv")
+    a_path = os.path.join(RESULTS_DIR, f"move_agreement_{dataset}.csv")
+    if not (os.path.exists(p_path) and os.path.exists(a_path)):
+        return
+    ph, ag = pd.read_csv(p_path), pd.read_csv(a_path)
+    ag = ag[ag.phase != "all"]
+    labels = {  # net -> (label, color, line style); the data's own player net is dashed (biased)
+        "pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_e12": ("mix 40M", SERIES[0], "-"),
+        "pair1024x32_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_e12": ("mix 40M + tail", SERIES[1], "-"),
+        "pair1024_hce-10k_e9": ("release net", SERIES[2], "-"),
+        "pair1024_gen1-10k+gen1-10k-aws_e6": ("gen1 5M", SERIES[3], "-"),
+        "pair1024_gen1-1k_e5": ("gen1-1k 5M", SERIES[4], "-"),
+        "pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9": ("gen1 20M (played this data)", INK2, (0, (4, 3))),
+    }
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
+    for ax, df, col, title, ylabel in (
+        (axes[0], ph, "r2", "Predicting the result", "R² vs the phase's average result"),
+        (axes[1], ag, "agree", "Ranking moves", "top pick = the move played"),
+    ):
+        order = list(dict.fromkeys(df.phase))
+        for net, (lab, color, style) in labels.items():
+            d = df[df.net == net].set_index("phase").reindex(order)
+            if d[col].isna().all():
+                continue
+            ax.plot(range(len(order)), d[col], color=color, linestyle=style, marker="o", markersize=5, label=lab)
+        if col == "agree":
+            base = df[df.net == df.net.iloc[0]].set_index("phase").reindex(order)
+            ax.plot(range(len(order)), base["random"], color=INK2, linestyle=(0, (1, 2)), linewidth=1.2,
+                    label="random legal move")
+        ax.set_xticks(range(len(order)), order)
+        ax.set_xlabel("move number")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title, loc="left")
+    handles, labs = axes[1].get_legend_handles_labels()
+    fig.legend(handles, labs, loc="upper left", bbox_to_anchor=(0.02, -0.02), ncol=4, fontsize=9)
+    fig.text(0.02, -0.17, f"Both on {dataset} (unseen by every net except the dashed one, which played these games). "
+             "~236 legal moves per position. The tail predicts results best but ranks moves worse than the "
+             "same net without it.", fontsize=8.5, color=INK2)
+    fig.suptitle("Predicting results vs ranking moves", x=0.02, ha="left", fontweight="bold")
+    save(fig, "predict_vs_rank")
 
 
 if __name__ == "__main__":
@@ -725,3 +834,4 @@ if __name__ == "__main__":
     fig_training_curves(epochs)
     fig_player_strength(m)
     fig_data_quality(m, runs, data)
+    fig_predict_vs_rank()

@@ -77,16 +77,17 @@ class Dataset:
 
         If any file is 37-col legacy, the whole batch falls back to no-metadata
         mode (otherwise pd.concat would NaN-fill the missing columns and
-        astype(int64) would produce i64::MIN garbage).
+        astype(int64) would produce i64::MIN garbage). 47-col files (39 + the
+        search columns data gen writes since 2026-10-27) load as 39-col.
 
         Outcomes are scaled (default 0.75) to sit in Tanh's linear region.
         """
         ncols_per_file = [pd.read_csv(f, header=None, nrows=1).shape[1] for f in files]
         for n in ncols_per_file:
-            if n not in (37, 39):
-                raise ValueError(f"Unexpected CSV column count: {n} (expected 37 or 39)")
+            if n not in (37, 39, 47):
+                raise ValueError(f"Unexpected CSV column count: {n} (expected 37, 39 or 47)")
 
-        has_metadata = all(n == 39 for n in ncols_per_file)
+        has_metadata = all(n in (39, 47) for n in ncols_per_file)
 
         # Read one file at a time with small dtypes and keep only numpy arrays,
         # so a 40M-row mix fits in RAM (default int64 frames would need ~12 GB).

@@ -35,6 +35,8 @@ Game ids in new datasets are `(hash(dataset name) % 100000 * 1000 + worker) * 10
 
 ## Datasets
 
+Row format: 39 columns (`sq0..sq35, result, move_num, game_id`) up to gen2-10k-aws; from 2026-10-27 data gen writes 47 (`+ score, ply, time_s, forced, best, nodes, pv, depth_scores` — see ENGINE_HISTORY "Why the next data saves the search"). Check a new dataset with `python training/check_datagen.py <dataset>`.
+
 Everything up to `hce-10k` was generated under the pre-2.0.0 rules (board-unchanged moves still legal; ~1% of moves in hce-10k). Locations as of 2026-10-23.
 
 | Dataset | File(s) | Rows | Played by / nodes | Starts | Notes |
@@ -50,6 +52,8 @@ Everything up to `hce-10k` was generated under the pre-2.0.0 rules (board-unchan
 | `gen1-10k-aws` | `training/data/gen1-10k-aws/` | 4.35M | same as `gen1-10k` | Independent | Same config as `gen1-10k`, run on AWS c8a.48xlarge, 190 workers, ~1 h 15 min on 2026-10-24 (stopped to match hce-10k-part1 size; instance stopped, can resume). Separate name so ids don't collide; train on both together. |
 | `gen1-10k-aws2` | `training/data/gen1-10k-aws2/` | 15.16M | same as `gen1-10k` | Independent | Same config, AWS c8a.48xlarge, 190 workers, ~4 h on 2026-10-24. Separate name so `gen1-10k-aws` (what `pair1024_gen1-10k+gen1-10k-aws_e6` was trained on) stays unchanged. |
 | `gen1-1k` | `training/data/gen1-1k/` | 4.73M | `pair1024_hce-10k_e9` / **1k** on every move (random openers too) | Independent | Same player as gen1-10k, 10× fewer nodes — tests whether data-gen search depth matters. Laptop 2026-10-25, 12 then 15 workers (15 = 1.36M rows/h vs 1.27M), ~3.5 h. 4,733,829 rows. |
+| `gen2-10k-aws` | `training/data/gen2-10k-aws/` | 4.85M | `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` / 10k on every move | Independent | **First gen2 data**: played by the gen1 19.9M net (+65 Elo over the release net at 10k). AWS c8a.48xlarge, 190 workers, 1.35 h on 2026-10-26, 3.6M rows/h, 4,852,079 rows, 93.0% unique. Size-matched to gen1 4.7M. CloudWatch alarm (CPU < 5% for 3×5 min → Stop) stopped the instance after the run. |
+| `gen1-10k-aws2@59` | first 59 shards (sorted name order) of `gen1-10k-aws2` | 4.72M | same as `gen1-10k` | Independent | Subset syntax `<dataset>@N` in train_pair.py (no files copied). Size-matched second half for the gen1+gen1 control mix. |
 | `gen1-10k+gen1-10k-aws+gen1-10k-aws2` | mix | 19.87M | | | All gen1 data so far; size-matched to `hce-10k` (19.77M). |
 | `hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2` | mix | 39.64M | | | All HCE release data + all gen1 data. Unique 88.8%. Tests whether more data helps even when half of it is weaker (HCE) labels. |
 
@@ -83,8 +87,15 @@ Run folders in `training/weights/`. "Net" = the epoch that got used, if one was.
 | `pair1024_hce-10k+hce-100k` | nnue_h1024_pairs_10k_plus_100k (20260429_185729) | 10 (e9) | 0.3880 @ e10 — different val set. "DUO", coin flip vs the release net. Net `pair1024_hce-10k+hce-100k_e9` |
 | `pair1024_gen1-10k+gen1-10k-aws` | — (2026-10-24, current train_pair.py) | 8 (**e6**) | 0.3539 @ e6 (e7 0.3538, e8 0.3544 back up), train 0.3259 @ e6; dropout 0.5, release recipe. First net trained on NN self-play data (4.70M rows, size-matched to hce-10k-part1). Different val set — not comparable to 0.3901. Net `pair1024_gen1-10k+gen1-10k-aws_e6` |
 | `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2` | — (2026-10-24, current train_pair.py) | 12 (**e9**) | 0.3445 @ e9 (e10 0.3444, e11/e12 0.3443), train 0.3350 @ e9; dropout 0.5, release recipe. 19.87M rows — size-matched to `hce-10k`. Net `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` |
+| `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_nosingle` | — (2026-10-26) | 14, stopped itself (**e9**) | 0.3447 @ e9 (best 0.3446 @ e10/11); release recipe but **pairs only** (`SINGLETONS = False`: the 108 single-piece features never encoded, their weight rows saved as zero, so v2.0.0 loads it unchanged). Same data and split as the run above (best 0.3443). Net `…_nosingle_e9` |
 | `pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2` | — (2026-10-25, GPU-encoding train_pair.py) | 14, stopped by hand (**e12**) | 0.3664 @ e12 (best 0.3663 @ e14), train 0.3616 @ e12; release recipe (dropout 0.5). 39.64M rows, 63.4M mirrored train. Val set is half HCE games — not comparable to gen1-only val. Net `pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_e12` |
+| `pair1024x32_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2` | — (2026-10-26/27) | 14, stopped by hand (**e12** tested) | 0.3593 @ e12 (0.3592 @ e14), train 0.3534 @ e12; release recipe + **tail** `1024→32→ReLU→1` (`TAIL = 32`). Same data/split as the no-tail mix (best 0.3663). Needs the dev engine `engines/gyges-dev-x32.exe` (GygesRust worktree `GygesRust-dev-tail`, branch `dev-tail`, uncommitted); play it as `dev:<net>` in `gyges-tools sprt`. Net `pair1024x32_…_e12` |
 | `pair1024_gen1-1k` | — (2026-10-25, GPU-encoding train_pair.py) | 9, stopped itself (**e5**) | 0.4182 @ e5 (best 0.4181 @ e6, back up from e7), train 0.3951 @ e5; release recipe (dropout 0.5). 4.73M rows of 1k-node games, size-matched to `pair1024_gen1-10k+gen1-10k-aws` (val 0.3539 there — different val set, but 1k-game results are clearly harder to predict). Net `pair1024_gen1-1k_e5` |
+| `pair1024_gen2-10k-aws` | — (2026-10-26) | 10, stopped itself (**e6**) | 0.3414 @ e6 (best 0.3413 @ e7), train 0.3148 @ e6; release recipe. 4.85M rows of gen2 games. Val clearly lower than gen1 4.7M (0.3539) — different val set, but cleaner labels. Net `pair1024_gen2-10k-aws_e6` |
+| `pair1024_gen1-10k+gen1-10k-aws+hce-10k-part1` | — (2026-10-26) | 9, stopped itself (**e6**) | 0.3756 @ e6 (best); release recipe. 9.28M = gen1 4.7M + gen0 4.57M (half HCE val set). Net `…+hce-10k-part1_e6` |
+| `pair1024_gen1-10k+gen1-10k-aws+gen2-10k-aws` | — (2026-10-26) | 11, stopped itself (**e7**) | 0.3447 @ e7 (best 0.3446 @ e8); release recipe. 9.56M = gen1 4.7M + gen2 4.85M. Net `…+gen2-10k-aws_e7` |
+| `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2@59` | — (2026-10-26) | 10, stopped itself (**e7**) | 0.3504 @ e7 (best); release recipe. 9.42M = gen1 4.7M + 4.72M more gen1 (control). Net `…+gen1-10k-aws2@59_e7` |
+| `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws` | — (2026-10-26) | 16, stopped by hand (**e12**) | 0.3409 @ e12 (best 0.3407 @ e16, creeping ≤0.0001); release recipe. 24.72M = gen1 19.87M + gen2 4.85M. Net `…+gen2-10k-aws_e12` |
 | — | nnue_h1024_pairs_10k_plus_100kx8 (20260429_213158) | — | trained on `hce-10k+hce-100kx8`, never saved a checkpoint; empty dir removed |
 
 Empty run dirs removed 2026-10-23 (no checkpoints): 20260424_141232, 20260427_013035, 20260427_015132, 20260429_213158.

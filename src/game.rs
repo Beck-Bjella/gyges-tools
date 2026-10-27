@@ -51,7 +51,10 @@ impl Schedules {
 
 /// What an engine replied to `go`.
 pub enum Reply {
-    Move { mv: Vec<usize>, score: f64, time_secs: f64, depth: f64 },
+    /// `nodes` and `pv` come from the last completed iteration's `info` line;
+    /// `depth_scores` holds (ply, score) after each completed iteration. 2.0.0 deepens
+    /// two plies at a time, so these are plies 1, 3, 5, …
+    Move { mv: Vec<usize>, score: f64, time_secs: f64, depth: f64, nodes: u64, pv: String, depth_scores: Vec<(u32, f64)> },
     /// `bestmove null`: the engine declares the position drawn.
     Draw { depth: f64 },
     /// No `bestmove` before the hard limit, or the engine process died.
@@ -66,17 +69,60 @@ impl Reply {
     }
 }
 
-/// Spawns an engine and runs the `ugi` / init / `isready` handshake.
+/// Spawns an engine and runs the `ugi` / init / `isready` handshake, then confirms
+/// the engine evaluates with the net the init commands asked for (2.0.0 falls back to
+/// its embedded net when a weights file fails to load, so that must stop the run).
 pub fn start_engine(path: &str, init: &[String]) -> UgiEngine {
     let mut engine = UgiEngine::new(path);
     engine.send("ugi");
     for cmd in init { engine.send(cmd); }
     engine.send("isready");
     wait_for_readyok(&mut engine, 10_000);
+    confirm_net(&mut engine, init);
     engine
 }
 
+/// Prints the confirmed net once per process (not once per engine).
+static NET_CONFIRMED: std::sync::Once = std::sync::Once::new();
+
+/// Runs a tiny search and checks the engine's `info string NN evaluation using <file>`
+/// line against the requested weights file (or the embedded net). Panics on a mismatch.
+fn confirm_net(engine: &mut UgiEngine, init: &[String]) {
+    if !init.iter().any(|c| c.trim() == "setoption nn true") {
+        return;
+    }
+    let expected = init.iter()
+        .find_map(|c| c.strip_prefix("setoption weightsPath "))
+        .map(|p| std::path::Path::new(p.trim()).file_name().unwrap().to_string_lossy().into_owned())
+        .unwrap_or_else(|| String::from("default.bin (embedded)"));
+
+    let layout: String = gen_board_independent().data.iter().map(|p| p.to_string()).collect();
+    engine.send(format!("setpos data {}", layout).as_str());
+    engine.send("setoption maxNodes 100");
+    engine.send("go");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut reported = None;
+    loop {
+        let Some(line) = engine.recive_with_timeout(deadline.saturating_duration_since(Instant::now())) else {
+            panic!("engine gave no reply to the net check (expected net {})", expected);
+        };
+        if let Some(rest) = line.trim().strip_prefix("info string NN evaluation using ") {
+            reported = Some(rest.trim_end_matches(" enabled").to_string());
+        }
+        if line.starts_with("bestmove") {
+            break;
+        }
+    }
+    match reported {
+        Some(name) if name == expected => {
+            NET_CONFIRMED.call_once(|| println!("[engine] net confirmed: {}", name));
+        }
+        other => panic!("engine is not using the requested net: expected {}, engine reports {:?}", expected, other),
+    }
+}
+
 /// Drains engine output until a `readyok` line is seen or `timeout_ms` elapses.
+/// A failed weights load stops the run here instead of silently using another net.
 fn wait_for_readyok(engine: &mut UgiEngine, timeout_ms: u64) {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
@@ -87,6 +133,7 @@ fn wait_for_readyok(engine: &mut UgiEngine, timeout_ms: u64) {
         }
         match engine.recive_with_timeout(remaining) {
             Some(line) if line.trim() == "readyok" => return,
+            Some(line) if line.contains("weight load failed") => panic!("engine: {}", line.trim()),
             _ => {}
         }
     }
@@ -111,6 +158,9 @@ pub fn get_move(engine: &mut UgiEngine, board: BoardState, limits: MoveLimits, d
     engine.send("go");
 
     let mut final_depth = 0u32;
+    let mut final_nodes = 0u64;
+    let mut final_pv = String::new();
+    let mut depth_scores: Vec<(u32, f64)> = vec![];
     let deadline = Instant::now() + Duration::from_secs(limits.time_secs as u64 * 2 + 5);
 
     loop {
@@ -133,6 +183,17 @@ pub fn get_move(engine: &mut UgiEngine, board: BoardState, limits: MoveLimits, d
                     final_depth = n;
                 }
             }
+            if let Some(p) = raw_cmds.iter().position(|&t| t == "nodes") {
+                final_nodes = raw_cmds.get(p + 1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+            }
+            if let Some(p) = raw_cmds.iter().position(|&t| t == "pv") {
+                final_pv = raw_cmds[p + 1..].join(" ");
+            }
+            if let Some(p) = raw_cmds.iter().position(|&t| t == "score") {
+                if let Some(s) = raw_cmds.get(p + 1).and_then(|v| v.parse::<f64>().ok()) {
+                    depth_scores.push((final_depth, s));
+                }
+            }
         } else if raw_cmds[0] == "bestmove" {
             if raw_cmds.get(1) == Some(&"null") {
                 return Reply::Draw { depth: final_depth as f64 };
@@ -147,6 +208,9 @@ pub fn get_move(engine: &mut UgiEngine, board: BoardState, limits: MoveLimits, d
                 score: raw_cmds.get(3).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0),
                 time_secs: raw_cmds.get(5).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0),
                 depth: final_depth as f64,
+                nodes: final_nodes,
+                pv: final_pv,
+                depth_scores,
             };
         }
     }
@@ -270,6 +334,28 @@ pub struct DataGame {
     pub time_cap_hits: usize,
     /// The engine forfeited (illegal move, crash, timeout). Don't train on it.
     pub forfeit: bool,
+    /// Per position, the search that chose its move, as `search_columns` text.
+    pub search: Vec<String>,
+}
+
+/// Scores at or beyond this size are proven wins/losses.
+pub const FORCED_SCORE: f64 = 100000.0;
+
+/// The search result columns appended to data rows:
+/// `score,ply,time_s,forced,best,nodes,pv,depth_scores`.
+/// `best` is the chosen move (`null` for a draw); `nodes` and `pv` (moves separated by
+/// spaces) are from the last completed iteration; `depth_scores` is `ply:score` after each
+/// completed iteration, separated by spaces (e.g. `1:-974.6 3:4559.6 5:99999997.0`).
+/// A randomized move's score doesn't describe the move played, so it is written as `nan`.
+pub fn search_columns(score: f64, depth: f64, time_secs: f64, mv: Option<&[usize]>, random: bool,
+                      nodes: u64, pv: &str, depth_scores: &[(u32, f64)]) -> String {
+    let best = mv.map_or(String::from("null"), |m| m.iter().map(|s| s.to_string()).collect::<Vec<_>>().join("|"));
+    let by_depth = depth_scores.iter().map(|(p, s)| format!("{}:{:.1}", p, s)).collect::<Vec<_>>().join(" ");
+    if random {
+        return format!("nan,{},{:.3},0,{},{},{},{}", depth, time_secs, best, nodes, pv, by_depth);
+    }
+    let forced = if score >= FORCED_SCORE { 1 } else if score <= -FORCED_SCORE { -1 } else { 0 };
+    format!("{:.1},{},{:.3},{},{},{},{},{}", score, depth, time_secs, forced, best, nodes, pv, by_depth)
 }
 
 /// Plays one self-play game with a single engine on both sides.
@@ -286,7 +372,7 @@ pub fn play_data_game(
     }
 
     let mut recorded: Vec<(BoardState, f64)> = vec![];
-    let mut game = DataGame { positions: vec![], depths: vec![], time_cap_hits: 0, forfeit: false };
+    let mut game = DataGame { positions: vec![], depths: vec![], time_cap_hits: 0, forfeit: false, search: vec![] };
     let mut move_history: Vec<Vec<usize>> = vec![];
     let mut turn = 0usize;
 
@@ -307,9 +393,14 @@ pub fn play_data_game(
             return game;
         }
         let (mv, score, time_secs, depth) = match reply {
-            Reply::Move { mv, score, time_secs, depth } => (mv, score, time_secs, depth),
+            Reply::Move { mv, score, time_secs, depth, nodes, pv, depth_scores } => {
+                game.search.push(search_columns(score, depth, time_secs, Some(&mv), limits.randomize != 0,
+                                                nodes, &pv, &depth_scores));
+                (mv, score, time_secs, depth)
+            }
             // Null move from engine = draw
-            _ => {
+            Reply::Draw { depth } | Reply::NoReply { depth } => {
+                game.search.push(search_columns(0.0, depth, 0.0, None, false, 0, "", &[]));
                 game.positions = recorded.into_iter().map(|(b, _)| (b, 0.0)).collect();
                 return game;
             }

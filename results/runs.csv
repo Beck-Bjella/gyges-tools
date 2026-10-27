@@ -1,0 +1,15 @@
+run,started,dataset,rows,train_rows,val_rows,hidden,dropout,lr,lr_decay,batch,patience,min_game_moves,min_move_num,mirror,split,note
+pair1024_hce-10k-part1,2026-04-26 19:35,hce-10k-part1,4571787,,,1024,,0.001,1.0,4096,,0,0,1,"by position, seed 42, 20% val",backfilled from NOTES; dropout not recorded (maybe 0.5); net used e6
+pair1024_hce-10k,2026-04-29 17:28,hce-10k,19773697,,,1024,0.5,0.001,1.0,4096,,0,0,1,"by position, seed 42, 20% val",backfilled from NOTES; the v2.0.0 release net (e9); stopped by hand at e11
+pair1024_gen1-10k+gen1-10k-aws,2026-10-24,gen1-10k+gen1-10k-aws,4704430,,,1024,0.5,0.001,1.0,4096,,0,0,1,"by position, seed 42, 20% val",backfilled; old train_pair (pre-encode); stopped by hand at e8; net used e6
+pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2,2026-10-24,gen1-10k+gen1-10k-aws+gen1-10k-aws2,19869040,,,1024,0.5,0.001,1.0,4096,,0,0,1,"by position, seed 42, 20% val",backfilled; old train_pair (pre-encode); stopped by hand at e12; net used e9
+pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,2026-10-25 01:14,hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,39642737,63428378,7928548,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",backfilled from config.txt/log.txt; stopped by hand after e14 (val creeping); net used e12 (and e7 for the epoch test)
+pair1024_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2_drop0.3,2026-10-25 13:31,hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,39642737,63428378,7928548,1024,0.3,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",backfilled from config.txt/log.txt; stopped by hand after e8 (laptop battery); net used e7
+pair1024_gen1-1k,2026-10-25 21:47,gen1-1k,4733829,7574126,946766,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",
+pair1024_gen2-10k-aws,2026-10-26 02:12,gen2-10k-aws,4852079,7763326,970416,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws+hce-10k-part1,2026-10-26 15:53,gen1-10k+gen1-10k-aws+hce-10k-part1,9276217,14841946,1855244,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws+gen2-10k-aws,2026-10-26 16:03,gen1-10k+gen1-10k-aws+gen2-10k-aws,9556509,15290414,1911302,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2@59,2026-10-26 17:09,gen1-10k+gen1-10k-aws+gen1-10k-aws2@59,9423134,15077014,1884627,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws,2026-10-26 18:29,gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws,24721119,39553790,4944224,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_nosingle,2026-10-26 21:06,gen1-10k+gen1-10k-aws+gen1-10k-aws2,19869040,31790464,3973808,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",pairs only (no single-piece features)
+pair1024x32_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,2026-10-26 22:31,hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,39642737,63428378,7928548,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",tail 1024->32->1

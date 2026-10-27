@@ -1,7 +1,8 @@
 //! Self-play training-data generation. Each worker owns one engine and appends
 //! every position of every decisive game to `training/data/<dataset>/w<NN>.csv`.
 //!
-//! CSV row: sq0..sq35, label (+1 mover won / -1 mover lost), move_num, game_id.
+//! CSV row: sq0..sq35, label (+1 mover won / -1 mover lost), move_num, game_id, then the
+//! search that chose the move (see `encode_csv_row`).
 //! Drawn games and games where the engine forfeited are not written.
 //!
 //! `dataset` is the registry name from NOTES.md, e.g. `gen1-5k`. Restarting a
@@ -66,18 +67,24 @@ pub fn generate_data_parallel(
         thread::spawn(move || data_gen_worker(worker_id, &path, id_base, games_per_worker, deadline, engine, schedules, debug))
     }).collect();
 
+    let mut panicked = 0;
     for (i, handle) in handles.into_iter().enumerate() {
         if handle.join().is_err() {
             eprintln!("[parallel] worker {} panicked", i);
+            panicked += 1;
         }
     }
 
     println!("[parallel] all {} workers done — shards in {}", thread_count, out_dir.display());
+    if panicked > 0 {
+        eprintln!("[parallel] {} of {} workers panicked", panicked, thread_count);
+        std::process::exit(1);
+    }
 }
 
 /// Cuts a half-written last row (from the program being killed mid-write) off
 /// an existing shard, so the file always ends on a complete line.
-fn trim_partial_line(path: &Path) {
+pub(crate) fn trim_partial_line(path: &Path) {
     let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) else { return };
     let Ok(len) = file.metadata().map(|m| m.len()) else { return };
     if len == 0 { return; }
@@ -98,7 +105,8 @@ fn last_local_game(path: &Path, id_base: usize) -> Option<usize> {
     file.seek(SeekFrom::Start(len.saturating_sub(512))).ok()?;
     let mut tail = String::new();
     file.read_to_string(&mut tail).ok()?;
-    let game_id: usize = tail.lines().last()?.rsplit(',').next()?.trim().parse().ok()?;
+    // game_id is column 39 (index 38) in both the 39-column and the 47-column format.
+    let game_id: usize = tail.lines().last()?.split(',').nth(38)?.trim().parse().ok()?;
     game_id.checked_sub(id_base)
 }
 
@@ -173,7 +181,7 @@ fn data_gen_worker(
                 let game_id = id_base + game;
                 let mut rows = String::with_capacity(110 * result.positions.len());
                 for (move_num, (board_state, score)) in result.positions.iter().enumerate() {
-                    rows.push_str(&encode_csv_row(board_state, *score, move_num, game_id));
+                    rows.push_str(&encode_csv_row(board_state, *score, move_num, game_id, &result.search[move_num]));
                 }
                 file.write_all(rows.as_bytes()).unwrap();
                 file.flush().unwrap();
@@ -210,12 +218,14 @@ fn data_gen_worker(
 }
 
 /// Encodes one board position as a CSV row.
-/// Format: sq0,sq1,...,sq35,score,move_num,game_id\n
+/// Format: sq0,sq1,...,sq35,score,move_num,game_id,search_score,ply,time_s,forced,best,nodes,pv,depth_scores\n
 ///
 /// `move_num` is the 0-indexed position within the game (0 = initial board,
 /// 1 = after the first move, ...). `game_id` is globally unique across workers
-/// and datasets — see GAMES_PER_WORKER_MAX for the encoding scheme.
-fn encode_csv_row(board: &BoardState, score: f64, move_num: usize, game_id: usize) -> String {
+/// and datasets — see GAMES_PER_WORKER_MAX for the encoding scheme. The last eight
+/// columns are the search that chose this position's move (`game::search_columns`).
+/// Datasets from before 2026-10-27 have only the first 39 columns.
+fn encode_csv_row(board: &BoardState, score: f64, move_num: usize, game_id: usize, search: &str) -> String {
     let mut s = String::with_capacity(110);
     for i in 0..36 {
         s.push_str(&board.data[i].to_string());
@@ -228,6 +238,8 @@ fn encode_csv_row(board: &BoardState, score: f64, move_num: usize, game_id: usiz
     s.push_str(&move_num.to_string());
     s.push(',');
     s.push_str(&game_id.to_string());
+    s.push(',');
+    s.push_str(search);
     s.push('\n');
     s
 }

@@ -29,12 +29,17 @@ print(f"PyTorch version: {torch.__version__}")
 # NOTES.md registry). Set TAG when re-training the same arch on the same data
 # with something changed, e.g. TAG = "drop0.3". No tag means the release recipe
 # (DROPOUT 0.5 and the optimizer settings below).
-DATASET     = "gen1-1k"
+DATASET     = "hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2"
 TAG         = ""
 HIDDEN_SIZE = 1024
 DROPOUT     = 0.5    # 0.5 = release recipe; tag the run if changed
 LR_DECAY    = 1.0    # lr multiplier after each epoch without a new best val (1.0 = off, release recipe)
-RUN_NAME    = f"pair{HIDDEN_SIZE}_{DATASET}" + (f"_{TAG}" if TAG else "")
+SINGLETONS  = True   # encode the 108 single-piece features (release recipe). False = pairs only:
+                     # their weights stay zero, so the saved net is still the 5886 layout the engine loads
+TAIL        = 0      # 0 = HIDDEN -> 1 (release recipe). N = HIDDEN -> N -> ReLU -> 1 ("pair1024x32");
+                     # needs an engine build that reads the tail
+RUN_NAME    = (f"pair{HIDDEN_SIZE}" + (f"x{TAIL}" if TAIL else "") + f"_{DATASET}"
+               + (f"_{TAG}" if TAG else ""))
 
 # ── Pair encoding layout (5886 features total) ──────────────────────────────
 #   [   0,  108)  singletons            36 sq × 3 piece types
@@ -93,17 +98,23 @@ class GygesNet(nn.Module):
         # Keep the padding row exactly zero so it contributes nothing in the sum.
         with torch.no_grad():
             self.fc1.weight[FEATURE_COUNT].zero_()
+            if not SINGLETONS:
+                # Never active, so never updated: zero rows = a pairs-only net.
+                self.fc1.weight[:_PAIR_11_OFFSET].zero_()
         self.fc1_bias = nn.Parameter(torch.zeros(HIDDEN_SIZE))
         self.dropout = nn.Dropout(DROPOUT)
-        self.fc2     = nn.Linear(HIDDEN_SIZE, 1)
+        self.fc2     = nn.Linear(HIDDEN_SIZE, TAIL or 1)
+        self.fc3     = nn.Linear(TAIL, 1) if TAIL else None
 
     def forward(self, indices):
         # indices: (B, MAX_ACTIVE) int64
         h = self.fc1(indices) + self.fc1_bias
         h = torch.relu(h)
         h = self.dropout(h)
-        out = self.fc2(h).squeeze(-1)
-        return torch.tanh(out)
+        out = self.fc2(h)
+        if self.fc3 is not None:
+            out = self.fc3(torch.relu(out))
+        return torch.tanh(out.squeeze(-1))
 
 
 def encode_position(board_36):
@@ -159,7 +170,7 @@ def encode_batch(boards, max_pieces):
     sq = keys % 36
     t = torch.where(valid, b.gather(1, sq), 0)
 
-    single = torch.where(valid, sq * 3 + t - 1, FEATURE_COUNT)
+    single = torch.where(valid & SINGLETONS, sq * 3 + t - 1, FEATURE_COUNT)
 
     i, j = torch.triu_indices(max_pieces, max_pieces, offset=1, device=device)
     si, sj, ti, tj = sq[:, i], sq[:, j], t[:, i], t[:, j]   # si < sj where valid
@@ -178,7 +189,7 @@ def check_encode_batch(boards, max_pieces):
     """Fail fast if encode_batch and encode_position disagree on any board."""
     got = encode_batch(torch.from_numpy(boards).to(device), max_pieces).cpu().numpy()
     for k in range(len(boards)):
-        want = sorted(encode_position(boards[k]))
+        want = sorted(x for x in encode_position(boards[k]) if SINGLETONS or x >= _PAIR_11_OFFSET)
         have = sorted(int(x) for x in got[k] if x != FEATURE_COUNT)
         if want != have:
             raise SystemExit(f"encode_batch mismatch on board {boards[k].tolist()}")
@@ -193,6 +204,7 @@ def save_weights_pair(model, path):
 
     Layout: fc1.weight [HIDDEN, FEATURE_COUNT] + fc1_bias [HIDDEN] +
             fc2.weight [1, HIDDEN]              + fc2.bias [1]
+    With a tail: fc2.weight [TAIL, HIDDEN] + fc2.bias [TAIL] + fc3.weight [1, TAIL] + fc3.bias [1].
     """
     with open(path, "wb") as f:
         # fc1: drop padding row, transpose to (HIDDEN, FEATURE_COUNT)
@@ -201,6 +213,9 @@ def save_weights_pair(model, path):
         f.write(model.fc1_bias.detach().cpu().numpy().astype(np.float32).tobytes())
         f.write(model.fc2.weight.detach().cpu().numpy().astype(np.float32).tobytes())
         f.write(model.fc2.bias.detach().cpu().numpy().astype(np.float32).tobytes())
+        if model.fc3 is not None:
+            f.write(model.fc3.weight.detach().cpu().numpy().astype(np.float32).tobytes())
+            f.write(model.fc3.bias.detach().cpu().numpy().astype(np.float32).tobytes())
 
 
 if __name__ == '__main__':
@@ -216,15 +231,20 @@ if __name__ == '__main__':
 
     # Everything else is data gen output: one shard per worker in
     # training/data/<dataset>/. A mix ("hce-10k+gen1-10k") loads every part in order.
+    # "<dataset>@N" takes only its first N shards (in the same sorted-name order used
+    # for whole datasets, so earlier runs keep their row order), for size-matched subsets.
     files = []
     for part in DATASET.split("+"):
         if part in RELEASE_FILES:
             files += [os.path.join(RELEASE_DIR, f) for f in RELEASE_FILES[part]]
             continue
-        shard_dir = os.path.join(REPO_ROOT, "training", "data", part)
+        name, _, n_shards = part.partition("@")
+        shard_dir = os.path.join(REPO_ROOT, "training", "data", name)
         part_files = sorted(glob.glob(os.path.join(shard_dir, "w*.csv")))
         if not part_files:
             raise SystemExit(f"no shards found in {shard_dir}")
+        if n_shards:
+            part_files = part_files[:int(n_shards)]
         files += part_files
 
     # Optional pruning knobs — leave at 0 to disable
@@ -280,7 +300,7 @@ if __name__ == '__main__':
     started = f"{datetime.now():%Y-%m-%d %H:%M}"
     print(f"Run: {run_dir}  (started {started})")
     config = (f"dataset {DATASET}\nhidden {HIDDEN_SIZE}\ndropout {DROPOUT}\nlr {LR}\n"
-              f"lr_decay {LR_DECAY}\nbatch {batch_size}\npatience {patience}\n")
+              f"lr_decay {LR_DECAY}\nbatch {batch_size}\npatience {patience}\nsingletons {SINGLETONS}\ntail {TAIL}\n")
     with open(os.path.join(run_dir, "config.txt"), "w") as f:
         f.write(config)
     print("Config: " + ", ".join(config.splitlines()))
@@ -289,7 +309,9 @@ if __name__ == '__main__':
         "train_rows": n_train, "val_rows": n_val, "hidden": HIDDEN_SIZE, "dropout": DROPOUT,
         "lr": LR, "lr_decay": LR_DECAY, "batch": batch_size, "patience": patience,
         "min_game_moves": MIN_GAME_MOVES, "min_move_num": MIN_MOVE_NUM,
-        "mirror": 1, "split": "by position, seed 42, 20% val", "note": "",
+        "mirror": 1, "split": "by position, seed 42, 20% val",
+        "note": "; ".join(x for x in ("" if SINGLETONS else "pairs only (no single-piece features)",
+                                     f"tail {HIDDEN_SIZE}->{TAIL}->1" if TAIL else "") if x),
     })
 
     best_val, since_best = float("inf"), 0

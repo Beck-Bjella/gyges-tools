@@ -1190,3 +1190,165 @@ Ladder of data-gen players (HCE @10k = 0) next to how good their data was (net t
 | release @10k (gen1-10k) | +307 | 0.534 |
 
 The release net at 1k plays as well as HCE at 10k, and its data was as good as HCE's — two very different players of equal strength gave equal-quality data. Data quality looks like a function of player strength alone, whatever makes the player strong (eval or search). The generation step is the same size at 1k as at 10k (+63 vs +65). If gen2-1k lands slightly above gen1-1k, nodes vs generations can be priced on one Elo-of-the-player scale.
+
+### gen2-10k-aws: first gen2 data — trained, 10k match done (rest paused)
+
+Data: `gen2-10k-aws`, played by `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` (gen1 19.9M) at 10k nodes, AWS 190 workers, 1.35 h, 3.6M rows/h → 4,852,079 rows (93.0% unique), 190 shards, 59 MB as .tgz. First run with the CloudWatch auto-stop (CPU < 5% for 3×5 min → Stop): it stopped the instance ~15 min after data gen ended. Server took the code with `git fetch && git reset --hard origin/nnue` after the history force-push (`6da4f93`).
+
+Net `pair1024_gen2-10k-aws`, release recipe, stopped itself at e10; took **e6** (val 0.3414, best 0.3413 @ e7). Val by data-gen player at ~4.8M rows: release @1k 0.418, release @10k 0.354, gen1 e9 @10k **0.341** — cleaner labels with the stronger player (different val sets, so a hint).
+
+| ~4.8M rows of… | vs release @10k |
+|---|---|
+| gen1-1k (release @1k) | 0.399 |
+| gen1 (release @10k) | 0.419 |
+| **gen2 (gen1 e9 @10k)** | **0.4425** [0.396, 0.489] |
+
++0.024 over gen1 at 10k (~0.7 sd) — about what the player-strength rule predicted (+65 Elo of player → ~+0.025). Paused here (laptop moved): still to run — gen2 vs release @50k, gen2 vs gen1 4.7M (`pair1024_gen1-10k+gen1-10k-aws_e6`) @50k with 400 pairs (`sprt <A> <B> 50000 50000 400`, new optional pairs argument), then plots.
+
+### gen2-10k-aws: the rest of the matches — a small edge, as predicted
+
+`pair1024_gen2-10k-aws_e6` (4.85M rows of gen2 games), rows written by the runner:
+
+| | pair score | 95% CI | LL / LD / DD / WD / WW | games W–L–D |
+|---|---|---|---|---|
+| vs release @10k (from before) | 0.4425 | [0.396, 0.489] | 56 / 8 / 94 / 10 / 32 | |
+| vs release @50k | 0.524 | [0.478, 0.569] | 38 / 5 / 102 / 10 / 45 | |
+| **vs gen1 4.7M e6 @50k, 400 pairs** | **0.519** | [0.485, 0.554] | 90 / 12 / 178 / 17 / 103 | 399 – 368 – 33 |
+
+Same-size comparison (~4.8M rows), vs release: gen1 0.419 / 0.534, gen2 0.4425 / 0.524 at 10k / 50k. Head-to-head at 50k: +0.019 (~+13 Elo, ~1.1 sd, LOS ~86%) — a small edge for gen2, not significant alone. Matches the player-strength prediction (+65 Elo of player → ~+0.025) and the user's call that the generation step would be small now. Cleaner labels (val 0.341 vs 0.354) but little strength from them at this size.
+
+Reading: after the one-time jump from HCE to a learned eval (+307 Elo of player strength), a generation step adds only ~+65 of player strength and a small gain in the trained net. Depth (nodes per data-gen move) is now the bigger per-step lever (~+95 per doubling, from release @1k vs @10k), at 2× cost per row. Next cheap test: gen2 at 20k nodes (≈ +150 of player strength). Charts redrawn (gen2 in aqua on golden, size and data-quality charts).
+
+### What does the added half's quality do? gen1 4.7M + 5M of gen0 / gen1 / gen2
+
+Same base (gen1 4.7M = `gen1-10k+gen1-10k-aws`), plus ~5M of data that differs only in who played it. Release recipe, epochs by the usual rule, 200 pairs each vs the release net. New `<dataset>@N` subset syntax gives the gen1 control half (`gen1-10k-aws2@59`, first 59 shards = 4.72M) without copying files. Order per user: train both, quick 10k tests, 50k at the end, control last. Laptop on full power: ~60 s an epoch for 14.8M training rows (~10% faster than before).
+
+| ~10M net (gen1 4.7M + …) | rows | best val | vs release @10k | @50k |
+|---|---|---|---|---|
+| (base: gen1 4.7M alone) | 4.70M | 0.354 | 0.419 | 0.534 |
+| A: + gen0 (HCE @10k) | 9.28M | 0.3756 (half HCE val) | 0.556 [0.510, 0.602] | **0.515** [0.466, 0.564] |
+| B: + gen1 (more of the same) | 9.42M | 0.3504 | 0.5025 [0.453, 0.553] | **0.551** [0.505, 0.598] |
+| C: + gen2 (gen1 e9 @10k) | 9.56M | 0.3447 | 0.5625 [0.514, 0.611] | **0.561** [0.518, 0.605] |
+| (gen1 19.9M) | 19.87M | 0.3445 | 0.593 | 0.640 |
+
+- **At 50k the added half's quality decides it:** HCE adds nothing (A 0.515, base 0.534), gen1 and gen2 both add (B 0.551, C 0.561; C − B +0.01, noise — same small gen2 edge as the 400-pair head-to-head).
+- **At 10k diversity beats quality:** a *different* player's games (A: HCE, C: gen2) gave +0.14; more of the *same* player's games (B) only +0.08 (~1.5–1.7 sd). New players reach new positions; coverage is what shallow search uses.
+- **C is the only one best at both depths** (new player = coverage, stronger player = quality) → always play new data with the newest net.
+- **No ceiling yet:** all three 10M nets sit far below gen1 19.9M at 50k (0.55–0.56 vs 0.640). 5M of gen2 doesn't replace 15M more gen1; good data still scales. Odd: pure gen1 4.7 → 9.4M gained only +0.017 @50k but 9.4 → 19.9M +0.089 — each point ±0.05, the 4.7M point is likely high (joint fit puts it ~0.52); not a pattern yet.
+- Next: more good data played by the newest net — gen2 to ~20M and train gen1+gen2 (~40M good rows).
+
+Charts redrawn; mixes now have their own colors (gen0+gen1 gray, gen1+gen2 green).
+
+### gen1 19.9M + gen2 4.85M (24.7M) — no gain over gen1 19.9M
+
+Trained `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws` (24.72M rows, release recipe). Val 0.3557 (e1) → 0.3409 (e12) → 0.3407 (e16), creeping ≤0.0001 an epoch, so stopped by hand at e16 (as with the 39.6M mix); took **e12** (first within 0.0002 of best). ~2.7 min an epoch.
+
+| | pair score | 95% CI |
+|---|---|---|
+| vs release @10k | 0.574 | [0.528, 0.619] (gen1 19.9M: 0.593) |
+| vs release @50k | 0.661 | [0.616, 0.707] (gen1 19.9M: 0.640) |
+| **vs gen1 19.9M e9 @50k, 400 pairs** | **0.494** | [0.458, 0.531] |
+
+Even head-to-head (it led 0.53 at 115 pairs, then evened out). The +0.02 vs release at 50k was noise. Adding 25% more rows from a slightly stronger player (+65 Elo) doesn't move a 20M net. Fits the rest: gen2's edge over gen1 is small at every size (+13 Elo head-to-head at 5M, +0.01 in the 10M mixes). Bigger player jumps are needed — deeper data-gen search (gen2 at 20k ≈ +150 of player strength) is the next test, before generating more gen2 at 10k. Also: the data-quality chart now holds every net (x = row-weighted player strength, line = size band), colors fixed (gen1+gen2 mix violet).
+
+### Encoding: pairs only (no single-piece features) — the singles are redundant
+
+New `SINGLETONS` setting in train_pair.py (default True = release recipe). False: the 108 single-piece features are never encoded and their first-layer rows stay exactly zero (checked in the saved file), so the net is still the 5886 layout the v2.0.0 engine loads — no engine change. Smoke run on gen1-10k checked the encoder and the zero rows, then deleted. Charts now treat any tagged run (`_drop0.3`, `_nosingle`) as a variant, not a point on the data lines.
+
+`pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_nosingle` — same data and split as gen1 19.9M:
+
+| | val (same val set) | vs release @10k | vs release @50k |
+|---|---|---|---|
+| pairs + singles (gen1 19.9M e9) | 0.3443 best | 0.593 | 0.640 |
+| **pairs only (e9)** | 0.3446 best | 0.565 [0.519, 0.612] | **0.640** [0.594, 0.686] |
+
+Val curves matched epoch for epoch (within 0.0003). Head-to-head @50k (400 pairs) stopped at 36 pairs on request — the rest already says "no difference". Why: every board has exactly 12 pieces, so each piece is in exactly 11 pairs, and any single-piece weight can be spread over its 11 pairs with the same first-layer output — the singles are linearly redundant given the pairs. First clean encoding ablation (same data/split/recipe). The zero-rows trick extends to any feature subset and to narrower widths (zero hidden units), so encoding and capacity ablations can run on v2.0.0 without engine work.
+
+### Tail on the 39.6M mix (1024 → 32 → 1): much better val, not (yet) better play
+
+**Training.** New `TAIL` setting in train_pair.py (0 = release recipe; N adds `Linear(1024, N) → ReLU → Linear(N, 1)`, runs named `pair1024xN_…`, saved as fc1 + fc2[N×1024] + b2[N] + fc3[1×N] + b3). `pair1024x32_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2`, same data/split as the no-tail mix: val 0.3735 (e1) → 0.3593 (e12) → 0.3592 (e14, stopped by hand); no-tail best 0.3663. Ahead at every epoch, ~0.007 lower at the end — by far the biggest val gain from any single change (dropout / data / encoding moved val ≤ 0.001).
+
+**Dev engine.** GygesRust: new worktree `../GygesRust-dev-tail` on branch `dev-tail`, **no commits**, one file changed (`gyges_engine/src/search/network.rs`, +67/−6): a weights file of the tail size loads a `Tail { w2[32][1024], b2[32], w3[32], b3 }` and eval does `tanh(w3 · relu(w2 · relu(L1) + b2) + b3)`; plain 1024→1 files load and evaluate exactly as before (only `tail: None` added). Built with Rust 1.80.0 (installed on the laptop with rustup; minimal profile) using the repo's release profile (opt 3, LTO, 1 codegen unit) → `engines/gyges-dev-x32.exe`. Runner: `dev:<net>` in `gyges-tools sprt` runs that net on the dev build.
+
+**Engine check.** dev vs v2.0.0 with the same release net (20 pairs @10k) gave LL 5 / WW 4 — but v2.0.0 vs *itself* gave LL 5 / WW 4 too: **the engine is not deterministic run to run** even with 1 thread and a node cap, so a pair-identity test can't prove two builds equal. (Harmless — it's inside the error bars — but worth knowing.) The engine's `eval` command prints the HCE only, so the tail path was checked by code (no-tail path unchanged) and by play. Both check rows in matches.csv are labelled as engine checks.
+
+**Matches** (tail net on the dev engine):
+
+| | pair score | 95% CI | think time / depth |
+|---|---|---|---|
+| vs release @10k | **0.678** | [0.630, 0.725] | 492 ms, 2.56 · release 300 ms, 2.77 (no-tail mix: 0.645) |
+| vs release @50k | ~0.64 at 89/200 pairs | — | stopped (user: go straight to the head-to-head) |
+| **vs no-tail mix e12 @50k** | **0.460 at 88/400 pairs** | [0.395, 0.526] | 2.10 s, 3.73 · 1.26 s, 3.70 — stopped for the night, LL 20 / WW 13 |
+
+So far the tail plays a bit *worse* than the no-tail net at 50k head-to-head (within noise at 88 pairs), despite the clearly better val. Possible reading: val measures predicting game results on average, not ranking the moves search has to choose between. Bar set before the test: ≥ 0.59 head-to-head worth it even at equal time (~60–80% slower evals ≈ 0.6× the nodes ≈ −65 Elo); 0.53–0.58 worth it only with a faster eval. Resume: rerun the head-to-head from scratch (`gyges-tools sprt dev:pair1024x32_…_e12 pair1024_hce-10k+…_e12 50000 50000 400`; the stopped one wrote no row).
+
+### Tail: conclusion, and how predictable each phase of the game is
+
+**Tail, for now:** no gain in play worth its cost — head-to-head 0.460 at 88/400 pairs vs the no-tail mix @50k (even the top of the CI, ~+0.03, is far below the ~0.59 a 60–80% slower eval needs). The biggest val gain of anything tried, but no clear strength gain: **val loss no longer tracks playing strength** at this level — every change has to be judged in matches.
+
+**Per-phase predictability** (`training/phase_analysis.py`, results in `results/phase_gen2-10k-aws.csv`). All nets run over gen2-10k-aws (4.85M positions, unseen by every net below). R² = 1 − MSE / variance of the (×0.75) labels in each move-number bucket; acc = sign of eval matches the winner (draws left out).
+
+| move # | n | release | gen1 5M | gen1-1k 5M | gen1 20M | mix 40M | mix 40M + tail |
+|---|---|---|---|---|---|---|---|
+| 0 | 270k | −0.016 | −0.010 | −0.026 | −0.002 | −0.004 | −0.008 |
+| 1–2 | 540k | 0.039 | 0.041 | 0.023 | 0.055 | 0.053 | 0.057 |
+| 3–5 | 801k | 0.172 | 0.169 | 0.151 | 0.190 | 0.196 | 0.207 |
+| 6–9 | 934k | 0.276 | 0.261 | 0.231 | 0.287 | 0.312 | 0.323 |
+| 10–14 | 1.03M | 0.474 | 0.448 | 0.395 | 0.490 | 0.513 | 0.530 |
+| 15–19 | 686k | 0.646 | 0.627 | 0.568 | 0.661 | 0.678 | 0.700 |
+| 20–29 | 499k | 0.727 | 0.713 | 0.648 | 0.745 | 0.758 | 0.784 |
+| 30+ | 94k | 0.784 | 0.782 | 0.710 | 0.810 | 0.817 | 0.848 |
+
+Sign accuracy runs from ~0.59 at the start board (≈ "side to move wins") to ~0.95 after move 30.
+
+- **Openings are nearly unpredictable for every net** (R² ≈ 0 at the start board, ≤ 0.06 after the two random moves, < 0.33 until move 10). A property of the game — results get decided later — not a net limit.
+- **Nets rank the same in every phase** (tail > mix > gen1 20M > release > gen1 5M > gen1-1k); no phase where one net is uniquely weak, so phase buckets are unlikely to help.
+- **The tail predicts better in every phase, most late** (+0.02–0.03 R² from move 15) — so its val gain is real and not an opening artifact, which makes the no-gain-in-play result sharper: predicting results better on average ≠ ranking sibling moves better. Next test: move agreement (does each net's best child match the strong player's move?).
+
+### Move agreement — explains the tail, and tracks strength better than val
+
+New `gyges-tools children <in.csv> <out.csv>` (src/children.rs): every legal next position of each input position, flipped to the opponent's view (the orientation of the next data-gen row), with a win flag. `training/move_agreement.py` samples positions from move 4 on (the first 4 plies of data-gen games are random), scores every child with each net (pick = child with the lowest score from the opponent's side) and checks it against the move actually played (the next row of the game). Sanity check: the played move was among the generated children for all 20,000 positions. Positions with an immediate win left out (none in this sample). **~236 legal moves per position** on average; random pick agrees 2.7%.
+
+On gen2-10k-aws (20k positions; played by gen1 19.9M e9 at 10k nodes):
+
+| net | agree (top pick = played move) | rank of played move (share rated above it) |
+|---|---|---|
+| gen1 19.9M e9 (*the net that played these games — biased*) | 0.256 | 0.141 |
+| mix 40M e12 | **0.168** | **0.142** |
+| mix 40M + tail e12 | 0.150 | 0.148 |
+| release | 0.139 | 0.160 |
+| gen1 4.7M | 0.129 | 0.178 |
+| gen1-1k 4.7M | 0.116 | 0.178 |
+
+- **The tail agrees less than the same data without it** (0.150 vs 0.168) and ranks the played move worse — it predicts results better (R²) but ranks sibling moves worse, which is what search uses. Explains why it didn't play better.
+- **Agreement orders the nets like the matches do** (mix > release > gen1 5M > gen1-1k; tail below mix), unlike val/R² (which put the tail first). A cheap strength proxy (minutes, no matches) — use it to screen variants before matches.
+- Caveats: the data's own player net is biased upward (needs another player's data to place fairly); agreement is 1-ply vs the player's ~2.6-ply search.
+Results per phase in `results/move_agreement_gen2-10k-aws.csv`.
+
+### Why the next data saves the search: the eval is reliable late and blind early — depth is the lever
+
+**Win-prediction and move-selection measurements work** (both on gen2-10k-aws, unseen by the nets compared; graded against how those games — gen1 19.9M e9 @10k — actually went):
+- Winner accuracy from the eval alone (mix 40M): ~60% at the start board (= the first-mover edge, no knowledge), 68% at moves 3–5, 74% at 6–9, 83% at 10–14, 90% at 15–19, 93% at 20–29, 95% at 30+; **91% over all positions from move 15 on**. Nets differ by only 1–2 points; the phase dominates.
+- Move agreement (1-ply eval's top pick = the move the 10k-node search played, out of ~236 legal moves; random 2.7%): mix 16.8%, tail 15.0%, release 13.9%, gen1 5M 12.9%, gen1-1k 11.6%; played move on average in the net's top ~15%. Orders nets like the matches do.
+
+**Reading.** The opening is unreadable by any eval (a property of Gyges: results are decided later), the late game is ~95% readable, and the middle game (moves 6–19) is where judgment is partial and choices matter. Strength comes from search reaching the readable positions. Every data result so far points the same way: label quality follows the strength of the data-gen player, and depth is its biggest lever (≈ +95 Elo of player strength per doubling of nodes vs +65 for a generation step). At 20k nodes the middle-game search completes only ~3 ply (2.0.0 deepens 2 plies at a time: 1, 3, 5, …; with ~236 moves per position, 20k nodes often finishes only ply 1 in the opening).
+
+**Labels plan (user):** a forced win/loss found by search is exact for that position under any opponent (the positions leading to it are not); everything else is "the result under play by this player", truer with deeper search. So: keep game results, and save the search for every position so labels can later use proven results exactly and blend in the search verdict, weighted by how deep the search got. Relabelling old data costs about as much as generating new data at the same budget, so the search info goes into data gen itself; one gen2-20k run answers both "does depth make better data" (vs gen2-10k) and "do search labels help" (result-only vs blended on the same rows).
+
+**Data gen format, from now on — 47 columns** (old datasets keep 39 and load as before; the training loader reads the first 39 of either):
+`sq0..sq35, result, move_num, game_id, score, ply, time_s, forced, best, nodes, pv, depth_scores`
+- `score` search score for the side to move (tanh × 10000; ≥ 100000 in size = proven); `nan` for the 4 random opening plies
+- `ply` deepest completed iteration; `time_s`; `forced` +1/−1 proven win/loss else 0
+- `best` the move actually played (games replay exactly from it); `nodes` of the last completed iteration; `pv` the expected line (space-separated)
+- `depth_scores` `ply:score` per completed iteration, e.g. `1:-974.6 3:4559.6 5:99999997.0`
+Shared by data gen and `relabel` (`game::search_columns`); ~155 bytes a row (4.85M rows ≈ 0.75 GB, ~150–200 MB as .tgz).
+
+**Validated** with new `training/check_datagen.py` on a real-settings run (gen1 e9 @20k, 8 workers, killed and resumed): replays every game (board + `best`, flipped = next row) — all 1,042 rows pass; results alternate; all 62 games end with the mover reaching the goal; random plies have `nan` scores; forced flags match scores; `depth_scores` ends at `ply`/`score` with odd increasing plies. **Forced results disagreeing with the game result: 0 of 358 at 20k** (2.3% at 1k nodes — weaker search failing to convert its wins, or unsound proofs; to recheck on the AWS data). Documented engine behaviour, not errors: positions decided at the root (forced, or a random ply) have `ply 0`, no nodes/pv (124 rows); in proven losses the engine may play a different move than its PV's first (32 rows) — `best` is always the move played.
+
+**Also:** `.gitignore` excluded every `*.csv`, so the results tables (matches/runs/epochs/datasets/phase/agreement) were never committed — fixed with `!results/*.csv` (datasets stay ignored).
+
+Next: AWS `datagen gen2-20k-aws 190 2.7 20000 pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` (~4.85M rows, ~2.7 h, ~$11), then `check_datagen.py` on it, the forced-proof spot check, train result-only vs blended, phase + move agreement, matches.
+
+**Runner now confirms the net.** Found that the runner only checked the weights file exists: if 2.0.0 fails to load it (wrong size, corrupt), it prints `info string weight load failed` and silently keeps its embedded release net. Now `start_engine` stops the run on that line, then runs a 100-node probe search and checks the engine's `NN evaluation using <file>` line against the requested file; prints `[engine] net confirmed: <file>` once. Tested: gen1 e9 → confirmed; truncated file → stops at start-up with exit code 1; release → `default.bin (embedded)`.
+
+**Did gen2-10k-aws really use gen1 e9?** (question: is that why gen2 was barely different?) Yes — move agreement already shows it: on gen2-10k-aws gen1 e9 picks the played move 25.6% of the time, the stronger 40M mix 16.8%, release 13.9%. Only the player has that outsized lead. The small gen2 edge is real, not a loading failure.
