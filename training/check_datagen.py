@@ -14,7 +14,7 @@ import sys
 from common import REPO_ROOT
 
 FORCED = 100000.0
-RANDOM_PLIES = 4          # data gen randomizes the first two full moves
+RANDOM_PLIES = 4          # data gen randomizes at most the first two full moves (none with opening `none`)
 
 
 def make_move(board, mv):
@@ -54,9 +54,9 @@ def check(dataset):
             result, move_num, game = int(r[36]), int(r[37]), int(r[38])
             score, ply, forced, best, nodes, pv, by_depth = r[39], int(r[40]), int(r[42]), r[43], r[44], r[45], r[46]
 
-            # Random opening plies carry no score; every other row has one.
-            if (move_num < RANDOM_PLIES) != (score == "nan"):
-                bad("random plies / nan score", where)
+            # Random opening plies carry no score (nan); only the first RANDOM_PLIES can be random.
+            if score == "nan" and move_num >= RANDOM_PLIES:
+                bad("nan score after the random plies", where)
             if score != "nan":
                 s = float(score)
                 want = 1 if s >= FORCED else -1 if s <= -FORCED else 0
@@ -86,8 +86,8 @@ def check(dataset):
                     else:
                         bad("pv does not start with best", where)
             if best != "null" and int(nodes) <= 0:
-                if ply == 0 and (move_num < RANDOM_PLIES or (score != "nan" and forced != 0)):
-                    stats["decided_at_root"] += 1              # decided at the root (forced, or a random ply): no nodes/pv
+                if ply == 0 and (score == "nan" or forced != 0):
+                    stats["decided_at_root"] += 1              # decided at the root (forced), or a random ply: no nodes/pv
                 else:
                     bad("nodes missing", where)
 

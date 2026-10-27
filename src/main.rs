@@ -24,7 +24,7 @@ pub struct EngineConfig {
 const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else { "./engines/gyges-v2.0.0" };
 
 fn main() {
-    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net]` runs data gen with
+    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|none]` runs data gen with
     // those overrides (for servers, no code edits needed).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("datagen") {
@@ -225,10 +225,19 @@ fn run_data_gen(overrides: &[String]) {
     // ---- Schedules ----------------------------------------------------
     // The node cap applies to the randomized opening moves too: uncapped,
     // 2.0.0 spends the full maxTime searching each random move.
+    // ---- Opening -----------------------------------------------------
+    // searched: the first two full moves are random non-losing moves, picked by the
+    //           engine after a full search (filtered by what it proved losing)
+    // wild:     the first two full moves are uniformly random, picked with no search
+    // none:     no random moves; every move is the engine's choice
+    let opening = overrides.get(5).map_or("searched", String::as_str);
+    assert!(["searched", "wild", "none"].contains(&opening), "opening must be searched, wild or none");
+    println!("[data gen] opening: {}", opening);
+
     let schedules = Schedules {
         depth:     vec![60],         // effectively no depth cap
         time:      vec![5],          // 5 sec per move (safety cap)
-        randomize: vec![1, 1, 0],    // randomize first two moves only
+        randomize: if opening == "none" { vec![0] } else { vec![1, 1, 0] },  // randomize first two moves only
         nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move
     };
 
@@ -241,5 +250,5 @@ fn run_data_gen(overrides: &[String]) {
     // 8 cores / 16 threads: 14 workers for max output, 8 to keep the machine usable.
     let thread_count     = overrides.get(1).map_or(12, |w| w.parse().expect("workers must be a number"));
 
-    data_gen::generate_data_parallel(dataset, engine, schedules, games_per_worker, max_hours, thread_count, false);
+    data_gen::generate_data_parallel(dataset, engine, schedules, opening == "wild", games_per_worker, max_hours, thread_count, false);
 }

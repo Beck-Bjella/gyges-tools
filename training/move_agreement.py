@@ -94,7 +94,10 @@ def main(dataset, n, nets):
         rows.append(dict(net=name, phase="all", n=int(m.sum()), agree=round(float(agree[m].mean()), 4),
                          rank=round(float(rank[m].mean()), 4), random=round(float((1 / n_kids[m]).mean()), 4)))
     out = pd.DataFrame(rows)
-    out.to_csv(os.path.join(REPO_ROOT, "results", f"move_agreement_{dataset}.csv"), index=False)
+    # Rerunning nets replaces their rows; other nets' results are kept.
+    path = os.path.join(REPO_ROOT, "results", f"move_agreement_{dataset}.csv")
+    saved = pd.concat([pd.read_csv(path).query("net not in @nets"), out]) if os.path.exists(path) else out
+    saved.to_csv(path, index=False)
     short = {nm: nm.replace("pair1024", "").replace("+gen1-10k-aws+gen1-10k-aws2", "+gen1(20M)")
              .replace("gen1-10k+gen1-10k-aws_", "gen1(5M)_")[:40] for nm in nets}
     phases = [f"{lo}-{hi}" if hi < 999 else f"{lo}+" for lo, hi in BUCKETS] + ["all"]

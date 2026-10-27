@@ -9,6 +9,7 @@
 
 use std::time::{Duration, Instant};
 
+use rand::seq::SliceRandom;
 use rand::Rng;
 
 use crate::board::BoardState;
@@ -358,12 +359,14 @@ pub fn search_columns(score: f64, depth: f64, time_secs: f64, mv: Option<&[usize
     format!("{:.1},{},{:.3},{},{},{},{},{}", score, depth, time_secs, forced, best, nodes, pv, by_depth)
 }
 
-/// Plays one self-play game with a single engine on both sides.
+/// Plays one self-play game with a single engine on both sides. With `wild_random`, the
+/// randomized moves are picked here (`random_move`) instead of by the engine after a search.
 pub fn play_data_game(
     engine: &mut UgiEngine,
     starting_board: BoardState,
     p1_goes_first: bool,
     schedules: &Schedules,
+    wild_random: bool,
     debug: bool,
 ) -> DataGame {
     let mut board = starting_board;
@@ -385,7 +388,16 @@ pub fn play_data_game(
         recorded.push((board, player_sign));
         let limits = schedules.for_move(turn / 2);
 
-        let reply = get_move(engine, board, limits, debug);
+        // A wild random move is picked here with no search, and recorded like a searched
+        // random move (score nan) with no ply, time, nodes or pv.
+        let wild = wild_random && limits.randomize != 0;
+        let reply = if wild {
+            random_move(&board).map_or(Reply::Draw { depth: 0.0 }, |mv| Reply::Move {
+                mv, score: 0.0, time_secs: 0.0, depth: 0.0, nodes: 0, pv: String::new(), depth_scores: vec![],
+            })
+        } else {
+            get_move(engine, board, limits, debug)
+        };
 
         if let Some(reason) = forfeit_reason(&reply, &board) {
             eprintln!("[EVENT] data gen engine {} — game discarded", reason);
@@ -409,8 +421,8 @@ pub fn play_data_game(
         if time_secs >= limits.time_secs as f64 * 0.95 {
             game.time_cap_hits += 1;
         }
-        // Only record depth for non-trivial positions (no forced win/loss found)
-        if score.abs() < 100000.0 {
+        // Only record depth for searched, non-trivial positions (no forced win/loss found)
+        if !wild && score.abs() < 100000.0 {
             game.depths.push(depth);
         }
 
@@ -450,6 +462,17 @@ pub fn print_board_from_starting_perspective(board: &BoardState, flip: bool) {
 }
 
 /// Random starting board: each home row is an independent shuffle of 3,3,2,2,1,1.
+/// A uniformly random legal move for the side to move (on the bottom); a move that
+/// reaches the goal is always taken, as the engine does. None when there is no move.
+fn random_move(board: &BoardState) -> Option<Vec<usize>> {
+    let mut gboard = gyges::BoardState::from(board.data);
+    let mut move_gen = gyges::MoveGen::default();
+    let moves = unsafe { move_gen.gen::<gyges::GenMoves, gyges::NoQuit>(&mut gboard, gyges::Player::One) }
+        .move_list.moves(&gboard);
+    let mv = moves.iter().find(|m| m.is_win()).or_else(|| moves.choose(&mut rand::thread_rng()))?;
+    Some(mv.to_string().split('|').map(|s| s.parse().unwrap()).collect())
+}
+
 pub fn gen_board_independent() -> BoardState {
     let mut p1_pieces: Vec<usize> = vec![3, 3, 2, 2, 1, 1];
     let mut p2_pieces: Vec<usize> = vec![3, 3, 2, 2, 1, 1];

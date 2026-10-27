@@ -43,6 +43,7 @@ pub fn generate_data_parallel(
     dataset: &str,
     engine: EngineConfig,
     schedules: Schedules,
+    wild_random: bool,
     games_per_worker: usize,
     max_hours: Option<f64>,
     thread_count: usize,
@@ -64,7 +65,7 @@ pub fn generate_data_parallel(
         let schedules = schedules.clone();
         let path = out_dir.join(format!("w{:02}.csv", worker_id));
         let id_base = (key * 1000 + worker_id) * GAMES_PER_WORKER_MAX;
-        thread::spawn(move || data_gen_worker(worker_id, &path, id_base, games_per_worker, deadline, engine, schedules, debug))
+        thread::spawn(move || data_gen_worker(worker_id, &path, id_base, games_per_worker, deadline, engine, schedules, wild_random, debug))
     }).collect();
 
     let mut panicked = 0;
@@ -118,6 +119,7 @@ fn data_gen_worker(
     deadline: Option<Instant>,
     engine_cfg: EngineConfig,
     schedules: Schedules,
+    wild_random: bool,
     debug: bool,
 ) {
     let mut engine = start_engine(&engine_cfg.path, &engine_cfg.init_commands);
@@ -155,7 +157,7 @@ fn data_gen_worker(
         let p1_goes_first = game % 2 == 0;
 
         let board = gen_board_independent();
-        let result = play_data_game(&mut engine, board, p1_goes_first, &schedules, debug);
+        let result = play_data_game(&mut engine, board, p1_goes_first, &schedules, wild_random, debug);
         games_played += 1;
 
         total_time_caps += result.time_cap_hits;
