@@ -329,7 +329,7 @@ def fig_strength(m, runs, data, nodes):
 # line style = data size. Colors stay fixed per generation as new ones are added.
 GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[7], "gen4": SERIES[3],
               "mix gen0+gen1": INK2, "mix gen1+gen2": SERIES[6], "gen1, moves 4+": SERIES[4],
-              "gen2, moves 4+": SERIES[5]}
+              "gen2, moves 4+": SERIES[5], "mix gen1+gen2, moves 4+": SERIES[7]}
 # Run TAGs that change which rows are trained on (not how): shown as their own series.
 DATA_VARIANTS = {"from4": ", moves 4+"}     # moves 0-3 (the random opening plies) dropped
 NODE_MARKERS = {1_000: "^", 3_000: "s", 10_000: "o", 20_000: "D", 30_000: "P"}
