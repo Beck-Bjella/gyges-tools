@@ -109,7 +109,11 @@ def net_info(net, runs, data):
     known = dict(zip(data.dataset, data.player_nodes))
     nodes = sorted({int(known.get(p, known.get(p + "-part1", 0))) for p in parts})
     family = source + (f", {nodes[0] // 1000}k-node games" if len(nodes) == 1 and nodes[0] else "")
-    return dict(run=run, rows=int(r.rows), dropout=r.dropout, source=source, family=family)
+    # Run names are pair{H}[x{TAIL}]_{dataset}[_{TAG}]: anything besides pair1024_{dataset} is a variant.
+    arch, _, tag = run.partition("_" + r.dataset)
+    variant = ", ".join(v for v in (arch[len("pair1024"):] if arch.startswith("pair1024") else arch,
+                                    tag.lstrip("_")) if v)
+    return dict(run=run, rows=int(r.rows), dropout=r.dropout, source=source, family=family, variant=variant)
 
 
 def fit_ratings(m, nodes, anchor=RELEASE, min_pairs=100):
@@ -280,6 +284,8 @@ def fig_strength(m, runs, data, nodes):
         pt = (info["rows"] / 1e6, e, se, net)
         if info["dropout"] == info["dropout"] and info["dropout"] != 0.5:     # tagged variant (NaN = unknown)
             variants.append((info["family"], f"dropout {info['dropout']:g}", *pt))
+        elif info["variant"]:
+            variants.append((info["family"], info["variant"], *pt))
         elif main_net[info["run"]] != net:
             variants.append((info["family"], "e" + net.rsplit("_e", 1)[1], *pt))
         else:
@@ -321,8 +327,10 @@ def fig_strength(m, runs, data, nodes):
 
 # Golden chart encodings: color = generation of the data, marker = data-gen nodes,
 # line style = data size. Colors stay fixed per generation as new ones are added.
-GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[5], "gen4": SERIES[4],
-              "mix gen0+gen1": INK2, "mix gen1+gen2": SERIES[6]}
+GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[5], "gen4": SERIES[3],
+              "mix gen0+gen1": INK2, "mix gen1+gen2": SERIES[6], "gen1, moves 4+": SERIES[4]}
+# Run TAGs that change which rows are trained on (not how): shown as their own series.
+DATA_VARIANTS = {"from4": ", moves 4+"}     # moves 0-3 (the random opening plies) dropped
 NODE_MARKERS = {1_000: "^", 3_000: "s", 10_000: "o", 30_000: "D"}
 
 
@@ -336,14 +344,15 @@ def size_style(rows):
 
 def golden_nets(m, runs, data):
     """Every net with matches, one epoch per run (the one with the most matches),
-    training variants (a run TAG, e.g. _drop0.3 or _nosingle) left out."""
+    training variants (a run TAG, e.g. _drop0.3 or _nosingle) left out — except
+    DATA_VARIANTS, which change which rows are trained on and get their own series."""
     nets = {n for n in set(m.net_a) | set(m.net_b) if n.startswith("pair")}
     n_matches = lambda net: int(((m.net_a == net) | (m.net_b == net)).sum())
     dataset_of = dict(zip(runs.run, runs.dataset))
     best = {}
     for net in nets:
         info = net_info(net, runs, data)
-        if not info or info["run"] != f"pair1024_{dataset_of[info['run']]}":
+        if not info or (info["variant"] and info["variant"] not in DATA_VARIANTS):
             continue
         if info["run"] not in best or n_matches(net) > n_matches(best[info["run"]]):
             best[info["run"]] = net
@@ -356,6 +365,8 @@ def golden_nets(m, runs, data):
         gens = sorted({int(known.generation[p]) for p in parts if p in known.index})
         nodes = sorted({int(known.player_nodes[p]) for p in parts if p in known.index})
         gen = f"gen{gens[0]}" if len(gens) == 1 else "mix " + "+".join(f"gen{g}" for g in gens)
+        if info["variant"]:
+            gen += DATA_VARIANTS[info["variant"]]
         out.append(dict(net=net, gen=gen, nodes=nodes[0] if len(nodes) == 1 else None, rows=info["rows"]))
     return sorted(out, key=lambda d: (d["gen"], -(d["nodes"] or 0), d["rows"]))
 
@@ -464,7 +475,7 @@ def fig_score_vs_rows(m, runs, data):
     for h in handles:
         h.set_markersize(7)
     fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.06, -0.02), ncol=4, fontsize=9)
-    fig.text(0.06, -0.13, "Color = generation of the data · marker = data-gen nodes (● 10k, ▲ 1k). "
+    fig.text(0.06, -0.17, "Color = generation of the data · marker = data-gen nodes (● 10k, ▲ 1k). "
              "Filled = measured head-to-head (≥100 pairs); hollow = from the joint rating fit. "
              "Release net = 19.8M gen0 at 0.5.", fontsize=8.5, color=INK2)
     fig.suptitle("Strength vs training data size, by search budget", x=0.06, ha="left", fontweight="bold")

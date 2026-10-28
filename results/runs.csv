@@ -14,3 +14,5 @@ pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws,2026-10-26 18:29,gen1-
 pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_nosingle,2026-10-26 21:06,gen1-10k+gen1-10k-aws+gen1-10k-aws2,19869040,31790464,3973808,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",pairs only (no single-piece features)
 pair1024x32_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,2026-10-26 22:31,hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,39642737,63428378,7928548,1024,0.5,0.001,1.0,4096,3,0,0,1,"by position, seed 42, 20% val",tail 1024->32->1
 pair1024_gen1-10k+gen1-10k-aws_from4,2026-10-27 17:47,gen1-10k+gen1-10k-aws,3659162,5854658,731833,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_from4,2026-10-27 18:16,gen1-10k+gen1-10k-aws+gen1-10k-aws2,15455700,24729120,3091140,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",
+pair1024_gen2-10k-aws_from4,2026-10-27 19:28,gen2-10k-aws,3772451,6035920,754491,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",

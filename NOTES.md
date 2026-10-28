@@ -98,6 +98,8 @@ Run folders in `training/weights/`. "Net" = the epoch that got used, if one was.
 | `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2@59` | — (2026-10-26) | 10, stopped itself (**e7**) | 0.3504 @ e7 (best); release recipe. 9.42M = gen1 4.7M + 4.72M more gen1 (control). Net `…+gen1-10k-aws2@59_e7` |
 | `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws` | — (2026-10-26) | 16, stopped by hand (**e12**) | 0.3409 @ e12 (best 0.3407 @ e16, creeping ≤0.0001); release recipe. 24.72M = gen1 19.87M + gen2 4.85M. Net `…+gen2-10k-aws_e12` |
 | `pair1024_gen1-10k+gen1-10k-aws_from4` | — (2026-10-27) | 9, stopped itself (**e6**) | 0.3010 @ e6; release recipe on gen1 4.7M with rows of moves 0–3 (the random plies) dropped (`MIN_MOVE_NUM = 4`): 3.66M rows. Val not comparable (no opening rows). Net `pair1024_gen1-10k+gen1-10k-aws_from4_e6` |
+| `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_from4` | — (2026-10-27) | 15, stopped itself (**e10**) | 0.2892 @ e10 (best 0.2890 @ e12); release recipe on gen1 19.87M with moves 0–3 dropped: 15.46M rows. Val not comparable (no opening rows). Net `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_from4_e10` |
+| `pair1024_gen2-10k-aws_from4` | — (2026-10-27) | 9, stopped itself (**e6**) | 0.2837 @ e6; release recipe on gen2-10k-aws with moves 0–3 dropped: 3.77M rows. The 10k side of the gen2-20k-aws depth comparison. Net `pair1024_gen2-10k-aws_from4_e6` |
 | — | nnue_h1024_pairs_10k_plus_100kx8 (20260429_213158) | — | trained on `hce-10k+hce-100kx8`, never saved a checkpoint; empty dir removed |
 
 Empty run dirs removed 2026-10-23 (no checkpoints): 20260424_141232, 20260427_013035, 20260427_015132, 20260429_213158.

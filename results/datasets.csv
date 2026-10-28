@@ -6,3 +6,4 @@ gen1-10k-aws,4351593,pair1024_hce-10k_e9,10000,1,2.0.0,training/data/gen1-10k-aw
 gen1-10k-aws2,15164610,pair1024_hce-10k_e9,10000,1,2.0.0,training/data/gen1-10k-aws2/,AWS c8a.48xlarge 190 workers 2026-10-24
 gen1-1k,4733829,pair1024_hce-10k_e9,1000,1,2.0.0,training/data/gen1-1k/,laptop 12 then 15 workers 2026-10-25; same player as gen1-10k at 10x fewer nodes
 gen2-10k-aws,4852079,pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9,10000,2,2.0.0,training/data/gen2-10k-aws/,AWS c8a.48xlarge 190 workers 2026-10-26; first gen2 data
+test-none-10k,29934,pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9,10000,2,2.0.0,training/data/test-none-10k/,"laptop 12 workers 15 min 2026-10-27; opening none (no random plies) - test set for real openings; games repeat exactly per start board"
