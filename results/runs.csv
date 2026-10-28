@@ -16,3 +16,7 @@ pair1024x32_hce-10k+gen1-10k+gen1-10k-aws+gen1-10k-aws2,2026-10-26 22:31,hce-10k
 pair1024_gen1-10k+gen1-10k-aws_from4,2026-10-27 17:47,gen1-10k+gen1-10k-aws,3659162,5854658,731833,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",
 pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_from4,2026-10-27 18:16,gen1-10k+gen1-10k-aws+gen1-10k-aws2,15455700,24729120,3091140,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",
 pair1024_gen2-10k-aws_from4,2026-10-27 19:28,gen2-10k-aws,3772451,6035920,754491,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",
+pair1024_gen1-10k+gen1-10k-aws_from4_min11,2026-10-27 20:01,gen1-10k+gen1-10k-aws,3522374,5635798,704475,1024,0.5,0.001,1.0,4096,3,11,4,1,"by position, seed 42, 20% val",
+pair1024_gen2-20k-aws_from4,2026-10-27 22:21,gen2-20k-aws,3889076,6222520,777816,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",
+pair1024_gen2-20k-aws_from4_blend0.5,2026-10-27 23:02,gen2-20k-aws,3889076,6222520,777816,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val","labels blend lam 0.5 (calibrated search score, proven exact)"
+pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws+gen2-20k-aws_from4,2026-10-27 23:43,gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws+gen2-20k-aws,23117227,36987562,4623446,1024,0.5,0.001,1.0,4096,3,0,4,1,"by position, seed 42, 20% val",

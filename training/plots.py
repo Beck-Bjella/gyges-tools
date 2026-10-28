@@ -327,11 +327,12 @@ def fig_strength(m, runs, data, nodes):
 
 # Golden chart encodings: color = generation of the data, marker = data-gen nodes,
 # line style = data size. Colors stay fixed per generation as new ones are added.
-GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[5], "gen4": SERIES[3],
-              "mix gen0+gen1": INK2, "mix gen1+gen2": SERIES[6], "gen1, moves 4+": SERIES[4]}
+GEN_COLORS = {"gen0": SERIES[0], "gen1": SERIES[1], "gen2": SERIES[2], "gen3": SERIES[7], "gen4": SERIES[3],
+              "mix gen0+gen1": INK2, "mix gen1+gen2": SERIES[6], "gen1, moves 4+": SERIES[4],
+              "gen2, moves 4+": SERIES[5]}
 # Run TAGs that change which rows are trained on (not how): shown as their own series.
 DATA_VARIANTS = {"from4": ", moves 4+"}     # moves 0-3 (the random opening plies) dropped
-NODE_MARKERS = {1_000: "^", 3_000: "s", 10_000: "o", 30_000: "D"}
+NODE_MARKERS = {1_000: "^", 3_000: "s", 10_000: "o", 20_000: "D", 30_000: "P"}
 
 
 def size_style(rows):
@@ -418,7 +419,7 @@ def fig_vs_release_by_budget(m, runs, data):
         h.set_markersize(7)
     ax.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=8.5)
     ax.set_title("Each training set vs the release net, as search gets deeper", loc="left")
-    fig.text(0.02, -0.04, "Color = generation of the data · marker = data-gen nodes (● 10k, ▲ 1k) · "
+    fig.text(0.02, -0.04, "Color = generation of the data · marker = data-gen nodes (● 10k, ◆ 20k, ▲ 1k) · "
              "line = data size (dashed ~5M, solid ~20M, dash-dot ~40M).\n"
              "Filled = measured head-to-head (≥100 pairs); hollow = from the joint rating fit. "
              "Release net = 0.5 by definition.", fontsize=8.5, color=INK2)
@@ -475,7 +476,7 @@ def fig_score_vs_rows(m, runs, data):
     for h in handles:
         h.set_markersize(7)
     fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.06, -0.02), ncol=4, fontsize=9)
-    fig.text(0.06, -0.17, "Color = generation of the data · marker = data-gen nodes (● 10k, ▲ 1k). "
+    fig.text(0.06, -0.22, "Color = generation of the data · marker = data-gen nodes (● 10k, ◆ 20k, ▲ 1k). "
              "Filled = measured head-to-head (≥100 pairs); hollow = from the joint rating fit. "
              "Release net = 19.8M gen0 at 0.5.", fontsize=8.5, color=INK2)
     fig.suptitle("Strength vs training data size, by search budget", x=0.06, ha="left", fontweight="bold")

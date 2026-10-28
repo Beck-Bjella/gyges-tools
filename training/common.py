@@ -50,6 +50,41 @@ def _is_starting_board(board):
             np.all(board[30:]  != 0))
 
 
+def blend_labels(result, score, forced, group, scale=0.75, lam=0.5, bins=50):
+    """Training targets from the game result (±1) and the search columns.
+
+    Positions the search proved (forced = ±1) get scale * the proven result. Other
+    positions with a search score get lam * scale * result + (1 - lam) * scale * E, where
+    E is the game result positions with that score actually reached, measured on the same
+    dataset's own rows (`group`) in equal-count score bins, kept monotone and interpolated.
+    The raw score is not used directly: it is biased toward the side to move (at score 0
+    it wins ~41% in gen2-20k-aws) and can exceed the 0.75 "certain" level. Rows without a
+    score keep scale * result. The calibration sees val rows too (a 50-point curve fitted
+    on millions of rows; negligible leak).
+    """
+    target = (scale * result).astype(np.float32)
+    for g in np.unique(group):
+        in_g = group == g
+        scored = in_g & ~np.isnan(score) & (forced == 0)
+        proven = in_g & (forced != 0)
+        if not scored.any() and not proven.any():
+            continue
+        s, r = score[scored] / 10000, result[scored]
+        edges = np.quantile(s, np.linspace(0, 1, bins + 1))
+        idx = np.clip(np.searchsorted(edges, s, side="right") - 1, 0, bins - 1)
+        n = np.bincount(idx, minlength=bins)
+        ok = n > 0
+        xs = (np.bincount(idx, weights=s, minlength=bins) / np.maximum(n, 1))[ok]
+        ys = np.maximum.accumulate((np.bincount(idx, weights=r, minlength=bins) / np.maximum(n, 1))[ok])
+        target[scored] = lam * scale * r + (1 - lam) * scale * np.interp(s, xs, ys)
+        target[proven] = scale * forced[proven]
+        print(f"  labels {g}: {proven.sum():,} proven ({(forced[proven] != result[proven]).sum():,} differ from "
+              f"the game result), {scored.sum():,} blended (lam {lam}), "
+              f"{(in_g & ~scored & ~proven).sum():,} result only; calibrated E at score "
+              + ", ".join(f"{x:+.1f} -> {np.interp(x, xs, ys):+.3f}" for x in (-0.5, 0.0, 0.5)))
+    return target
+
+
 class Dataset:
     """A Gyges training dataset.
 
@@ -72,7 +107,7 @@ class Dataset:
     # ── Construction ──────────────────────────────────────────────────────
 
     @classmethod
-    def from_files(cls, files, outcome_scale=0.75):
+    def from_files(cls, files, outcome_scale=0.75, labels="result", lam=0.5):
         """Load one or more CSVs. Auto-detects 37-col vs 39-col format.
 
         If any file is 37-col legacy, the whole batch falls back to no-metadata
@@ -81,6 +116,8 @@ class Dataset:
         search columns data gen writes since 2026-10-27) load as 39-col.
 
         Outcomes are scaled (default 0.75) to sit in Tanh's linear region.
+        labels="blend" mixes the search columns of 47-col files into the targets
+        (see blend_labels); other files keep the game result.
         """
         ncols_per_file = [pd.read_csv(f, header=None, nrows=1).shape[1] for f in files]
         for n in ncols_per_file:
@@ -95,18 +132,30 @@ class Dataset:
         if has_metadata:
             dtypes.update({37: np.int32, 38: np.int64})
         boards, outcomes, move_nums, game_ids = [], [], [], []
-        for f in files:
+        scores, forced, groups = [], [], []
+        for f, n in zip(files, ncols_per_file):
             # Trim any 39-col files down to 37 if mixed with legacy files.
-            df = pd.read_csv(f, header=None, usecols=list(dtypes), dtype=dtypes)
+            search = labels == "blend" and n == 47
+            file_dtypes = {**dtypes, 39: np.float32, 42: np.int8} if search else dtypes
+            df = pd.read_csv(f, header=None, usecols=list(file_dtypes), dtype=file_dtypes)
             boards.append(df.iloc[:, :36].to_numpy())
-            outcomes.append(df.iloc[:, 36].to_numpy().astype(np.float32) * outcome_scale)
+            outcomes.append(df[36].to_numpy().astype(np.float32) * outcome_scale)
             if has_metadata:
-                move_nums.append(df.iloc[:, 37].to_numpy())
-                game_ids.append(df.iloc[:, 38].to_numpy())
+                move_nums.append(df[37].to_numpy())
+                game_ids.append(df[38].to_numpy())
+            if labels == "blend":
+                scores.append(df[39].to_numpy() if search else np.full(len(df), np.nan, np.float32))
+                forced.append(df[42].to_numpy() if search else np.zeros(len(df), np.int8))
+                groups.append(np.full(len(df), os.path.basename(os.path.dirname(f))))
             del df
 
         boards   = np.concatenate(boards)
         outcomes = np.concatenate(outcomes)
+        if labels == "blend":
+            outcomes = blend_labels(outcomes / outcome_scale, np.concatenate(scores),
+                                    np.concatenate(forced), np.concatenate(groups), outcome_scale, lam)
+        elif labels != "result":
+            raise ValueError(f"labels must be 'result' or 'blend', not {labels!r}")
         if has_metadata:
             move_nums = np.concatenate(move_nums)
             game_ids  = np.concatenate(game_ids)
@@ -115,7 +164,8 @@ class Dataset:
             game_ids  = None
 
         ds = cls(boards, outcomes, move_nums, game_ids)
-        mixed_note = "" if all(n == ncols_per_file[0] for n in ncols_per_file) else " (mixed formats — fell back to legacy)"
+        mixed_note = " (mixed with legacy 37-col files — metadata dropped)" if 37 in ncols_per_file and not all(
+            n == 37 for n in ncols_per_file) else ""
         print(f"Loaded {len(ds):,} rows from {len(files)} file(s) — "
               f"{'with metadata (move_num, game_id)' if ds.has_metadata else 'legacy 37-col format'}"
               f"{mixed_note}")

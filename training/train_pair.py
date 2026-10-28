@@ -38,6 +38,10 @@ SINGLETONS  = True   # encode the 108 single-piece features (release recipe). Fa
                      # their weights stay zero, so the saved net is still the 5886 layout the engine loads
 TAIL        = 0      # 0 = HIDDEN -> 1 (release recipe). N = HIDDEN -> N -> ReLU -> 1 ("pair1024x32");
                      # needs an engine build that reads the tail
+LABELS      = "result"  # "result" = game result (release recipe). "blend" = proven positions get the proven
+                        # result, the rest LAMBDA * result + (1 - LAMBDA) * calibrated search score
+                        # (47-col data only; other data keeps the result). Tag the run if changed.
+LAMBDA      = 0.5
 RUN_NAME    = (f"pair{HIDDEN_SIZE}" + (f"x{TAIL}" if TAIL else "") + f"_{DATASET}"
                + (f"_{TAG}" if TAG else ""))
 
@@ -251,7 +255,7 @@ if __name__ == '__main__':
     MIN_GAME_MOVES = 0   # drop games shorter than N positions (random-opening junk)
     MIN_MOVE_NUM   = 0   # drop positions earlier than this within their game
 
-    ds = Dataset.from_files(files)
+    ds = Dataset.from_files(files, labels=LABELS, lam=LAMBDA)
     ds.stats("Raw")
     if MIN_GAME_MOVES > 0:
         ds = ds.filter_min_moves(MIN_GAME_MOVES)
@@ -300,7 +304,8 @@ if __name__ == '__main__':
     started = f"{datetime.now():%Y-%m-%d %H:%M}"
     print(f"Run: {run_dir}  (started {started})")
     config = (f"dataset {DATASET}\nhidden {HIDDEN_SIZE}\ndropout {DROPOUT}\nlr {LR}\n"
-              f"lr_decay {LR_DECAY}\nbatch {batch_size}\npatience {patience}\nsingletons {SINGLETONS}\ntail {TAIL}\n")
+              f"lr_decay {LR_DECAY}\nbatch {batch_size}\npatience {patience}\nsingletons {SINGLETONS}\ntail {TAIL}\n"
+              f"labels {LABELS}" + (f" lam {LAMBDA}" if LABELS == "blend" else "") + "\n")
     with open(os.path.join(run_dir, "config.txt"), "w") as f:
         f.write(config)
     print("Config: " + ", ".join(config.splitlines()))
@@ -311,7 +316,9 @@ if __name__ == '__main__':
         "min_game_moves": MIN_GAME_MOVES, "min_move_num": MIN_MOVE_NUM,
         "mirror": 1, "split": "by position, seed 42, 20% val",
         "note": "; ".join(x for x in ("" if SINGLETONS else "pairs only (no single-piece features)",
-                                     f"tail {HIDDEN_SIZE}->{TAIL}->1" if TAIL else "") if x),
+                                     f"tail {HIDDEN_SIZE}->{TAIL}->1" if TAIL else "",
+                                     f"labels blend lam {LAMBDA} (calibrated search score, proven exact)"
+                                     if LABELS == "blend" else "") if x),
     })
 
     best_val, since_best = float("inf"), 0
