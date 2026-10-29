@@ -28,7 +28,7 @@ const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else {
 const ENGINE_DATAGEN: &str = if cfg!(windows) { "./engines/gyges-v2.0.0-datagen.exe" } else { "./engines/gyges-v2.0.0-datagen" };
 
 fn main() {
-    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|nearbest[:margin]|none] [min_ply]` runs data gen with
+    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|nearbest[:margin]|none] [min_ply] [random_moves]` runs data gen with
     // those overrides (for servers, no code edits needed).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("datagen") {
@@ -255,14 +255,17 @@ fn run_data_gen(overrides: &[String]) {
             engine.init_commands.push(format!("setoption minPly {}", min_ply));
         }
     }
-    println!("[data gen] opening: {}{}, min ply: {}, engine: {}", opening,
-             if opening == "nearbest" { format!(" (margin {})", margin) } else { String::new() }, min_ply, engine.path);
+    // ---- Random opening length -----------------------------------------
+    // Full moves (both sides) of random opening; 2 = the first 4 plies.
+    let random_moves: usize = overrides.get(7).map_or(2, |n| n.parse().expect("random_moves must be a number"));
+    println!("[data gen] opening: {}{}, random moves: {}, min ply: {}, engine: {}", opening,
+             if opening == "nearbest" { format!(" (margin {})", margin) } else { String::new() }, random_moves, min_ply, engine.path);
 
     let schedules = Schedules {
         // nearbest picks its move apart from the search, so the random moves get a ply-1 search only
-        depth:     if opening == "nearbest" { vec![1, 1, 60] } else { vec![60] },  // otherwise no depth cap
+        depth:     if opening == "nearbest" { [vec![1; random_moves], vec![60]].concat() } else { vec![60] },  // otherwise no depth cap
         time:      vec![5],          // 5 sec per move (safety cap)
-        randomize: if opening == "none" { vec![0] } else { vec![1, 1, 0] },  // randomize first two moves only
+        randomize: if opening == "none" { vec![0] } else { [vec![1; random_moves], vec![0]].concat() },  // randomize the first random_moves moves only
         nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move
     };
 

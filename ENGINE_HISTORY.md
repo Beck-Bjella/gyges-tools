@@ -1541,3 +1541,48 @@ Predictions for the ~5M gen3 set:
 Reading: 1 and 2 hold but 3 short → the opening fix works and something else (volume?) limits strength; all three → a generation jump; 3 below 0.55 → something in the stack isn't working.
 
 **The real test is the early game** (user): both fixes act there — the new opening on plies 0–3 (honest opening rows) and fairness of every row; the floor mostly on plies 4–9 (24% blind at 10k; later moves almost always reach ply 3 anyway). So prediction 2, sharpened: on the real-opening test sets (test-none-10k, test-none-release-10k, test-none-best-10k; `phase_analysis.py`), the gen3 net picks the winner more often than the best net at moves 0–5 (best: 55.5% on test-none-10k) and 6–12 (71.6%), keeps calling the first mover ahead ~46% (best 44.7%), and is about level from move 15 on (~90%, neither fix targets it). Early gain + late level = the fixes work where they should; no early gain = something in the pipeline isn't doing what we think, whatever the overall strength.
+
+### Decisions and reasoning, 2026-10-29 (so the thinking is on record)
+
+- **It's the minimum depth, not the depth** (user). 20k data raised average depth and changed little; the ply-3 floor raises the minimum and cleaned the games up. Ply 1 isn't a search — it never looks at the reply — so ply 3 is the smallest search worth calling one.
+- **The floor is a design choice, not an experiment** (user). Clear mechanism, clear game-quality evidence, ~free in the engine (95% of plain-10k speed), nothing plausible that makes it hurt. No floor-only strength test before using it; if the paper wants its share later, a floor-only set is an optional ablation. Paper wording: a minimum search depth so every move considers the opponent's reply.
+- **The real test of gen3 is the early game** (user): both fixes act on plies 0–9, so no early-game gain on real openings = something isn't working (logged with the predictions).
+- **gen3 trains alone, no pooling with gen1** (user). gen3 is a different player and recipe; pooling gen1's old-recipe games back in mixes the fix with what it fixed; no pooled set has ever beaten its pure base at depth. Pooling gets tested only if gen3 20M alone doesn't beat the best net (one extra training then: gen3 vs gen3 + gen1).
+- **The player net's own biases barely matter** for the data: labels are outcomes, not the net's opinion. A uniform "first mover is ahead" belief shifts every leaf at the same depth equally, so it doesn't change move choice — measured: release (calls first mover ahead 64% on real openings), gen1 e9 (56–64%) and the best net (44.7%) all give the first mover 46% in real games. What does carry over is position-specific misjudgment (blunders, unvisited positions); the floor and the near-best opening cut exactly that, and a stronger player cuts it further — hence the best net as gen3's player.
+- **AlphaZero / Leela comparison:** they also train value on outcomes and pool games, but only from a sliding window of nets a few Elo apart, with opening variety from sampling near-best moves for both sides — they never pool players 100+ Elo apart or hand one side a messy random opening. Supports "pool only close players" and "fix the opening", not "pooling is fine". Stockfish NNUE pools freely but trains mostly on search scores, which depend much less on who played.
+- **Blend labels parked** until the big changes (recipe, gen3) are done (user): +36 @10k / n.s. @50k is small next to the data recipe.
+- **Too many bad models** (user): stop testing weak variants; keep only decision-relevant tests. The ~5M nets are the test bed for 20M decisions — moves 4+ is the one 5M → 20M transfer checked so far (+35 at 4.7M, ≈ +67 at 20M).
+- **Seeded trainer:** `SEED` in train_pair.py (init, dropout, batch order); checked on the GPU — same seed gives bit-identical weights after 40 steps, a different seed differs. All runs before 2026-10-29 are unseeded.
+- **Plan:** AWS gen3 5M (best net, nearbest 0.1 + minPly 3, all rows; ~2.8–3.6 h on the c8a) → train alone, check the predictions → 20M if it holds. The server needs the GygesRust `datagen-options` branch (not pushed).
+
+**Overnight queue (2026-10-29 night, then shutdown):** seeded second runs (`SEED = 1`, tag `from4_s1`) of the two ~5M baselines the gen3 5M net will be judged against — `gen1-10k+gen1-10k-aws` and `gen2-10k-aws`, moves 4+; matches @10k then @50k: the gen2-vs-gen1 2×2 (does a stronger player give better rows? one pairing already played: 0.566 @50k) and seed-vs-original for each (run-to-run noise at ~5M, so we know how many gen3 seeds to train); then local gen3 data (`gen3-10k-laptop`, 14 workers, new recipe) with the time left. Status lines in the scratchpad `overnight_1029.status`.
+
+### Overnight 2026-10-29 results: gen2 vs gen1 per row, and run-to-run noise at ~5M
+
+Both seeded reruns (`_from4_s1`) picked epoch 6 with the same val as the originals (gen1 0.3011 vs 0.3010, gen2 0.2837 vs 0.2837). Pair scores (400 games each):
+
+| Match | @10k | @50k |
+|---|---|---|
+| gen2 orig vs gen1 orig (earlier) | 0.530 | 0.566 |
+| gen2 s1 vs gen1 s1 | 0.599 | 0.476 |
+| gen2 orig vs gen1 s1 | 0.557 | 0.532 |
+| gen2 s1 vs gen1 orig | 0.580 | 0.531 |
+| **gen2 vs gen1, mean of 4** | **0.567 (+47)** | **0.526 (+18)** |
+| gen1 s1 vs gen1 orig | 0.497 | 0.477 |
+| gen2 s1 vs gen2 orig | 0.487 | **0.401 (−70)** |
+
+Stronger player → better rows: clear @10k (4/4), only a lean @50k (3/4). Same recipe, different seed: level @10k, but up to 70 Elo apart @50k — at ~5M one net per recipe can't settle a 50k comparison. gen3 5M: train 2+ seeds, read 10k and 50k together. User: 5M is a screen for big effects; 20M is where data effects really show. A 5M gen3 net is judged against the ~5M nets, not the best net (15.5M rows) — the early-game "beat the best net" prediction is a bonus bar, not a fair one at 5M.
+
+Local gen3 pilot `gen3-10k-laptop` (best net, nearbest 0.1 + minPly 3, 4 near-best plies, 5.1 h, 14 workers): 713,135 rows, 34,409 games, check_datagen passes. Floor works: of 506k searched rows at move 4+, ply 1 = 23 rows (5 s per-move time cap hit while finishing ply 3), ply 3 = 73% (19% of those go past 10k nodes to finish ply 3, max 228k), ply 5+ never past 10k (max 9,999).
+
+**Problem found: duplicate games.** The engine is deterministic after the opening, so two games that reach the same board after the random plies are the same game to the end (all 917 cases). 4 near-best plies give only ~570k distinct openings (measured from matching pairs): 2.7% duplicate games after 34k games, 6.3% repeated rows at move 4+ (old recipe 0.13%). Extrapolated: ~20% duplicate games at 5M, ~55% at 20M. The pilot is a dress rehearsal, not part of gen3 (opening differs from the final recipe).
+
+### 8 near-best opening plies
+
+New data gen arg 8 `random_moves` (full moves of random opening, default 2); check_datagen takes the random plies as arg 2. Test `test-gen3-10k-min3-nb8` (best net, nearbest 0.1, minPly 3, random_moves 4, 30 min, 14 workers): 108,456 rows, 5,601 games, ~1.4% draws (not written), checks pass.
+
+- **Variety:** distinct openings measured from matching pairs roughly double per extra ply — ~600k after 4 plies, 1.3M / 2.2M / 3.8M after 5/6/7, ≥ ~4M after 8 (one matching pair at ply 8 → ~15M, very noisy). Per-ply engine sampling (`opening_pool.py`) overestimates 2–18× (transpositions, uneven pools), so the pair counts are the number to trust. Projected duplicate games: ~1–3% at 5M, ~3–12% at 20M (4 plies: ~20% / ~55%).
+- **Fairness:** first mover wins 45.4% (±0.7; pilot 47.9%, real openings ~46%).
+- **Quality** (judge `gen2-20k-aws_from4_e7`, mover's eval lost per move): old random opening plies 2–4 cost 0.34 / 0.51 / 0.55; near-best plies 0.10–0.13 at every ply 2–8; pilot's searched plies 5–8 0.08 / 0.08 / 0.02 / 0.02. So 4 extra near-best moves cost ~0.06 more each than searched moves. In both near-best sets the first 2 searched plies after the opening still read ~0.08–0.10, then ~0 — the judge (moves 4+ net, never saw opening rows; ply 1 reads −0.20) is rough this early, so costs are approximate. Lopsided (|judge| > 0.5) at ply 8: 29.7% vs pilot 28.9% vs old 43.4%; at ply 4: 8.7% / 9.2% / 40.1%.
+
+**Why 8 near-best plies is faster, not slower:** per-move times in the data — searched moves at plies 9–12 take the same time in the 4-ply pilot and the 8-ply test (0.40 s), so the machine ran at the same speed. The difference: searched plies 5–8 are the most expensive moves of the game (0.87 / 0.78 / 0.73 / 0.59 s — early middlegame, the floor needs the most nodes there); with 8 near-best plies those become near-best picks (~0.13 s). Rows per worker-hour from move times: 10.6k (4-ply pilot) → 16.5k (8-ply). Those plies still see the reply (two-ply score), they just aren't searched deeper. Decision (user): 8 near-best plies is the gen3 recipe for 5M and 20M; skip-and-count exact opening repeats before 20M (later merges are an opening effect too and nearly vanish with 8 plies: 0.1% of rows vs 3.8% with 4); smoke test on AWS before the run.

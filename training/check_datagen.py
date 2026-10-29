@@ -5,7 +5,7 @@ flipping it must give the next row of the same game. Also checks results, the ra
 opening plies, and that the search columns agree with each other. Exits non-zero on
 any failure.
 
-Usage: python training/check_datagen.py <dataset>
+Usage: python training/check_datagen.py <dataset> [random_plies]
 """
 import glob
 import os
@@ -14,7 +14,7 @@ import sys
 from common import REPO_ROOT
 
 FORCED = 100000.0
-RANDOM_PLIES = 4          # data gen randomizes at most the first two full moves (none with opening `none`)
+RANDOM_PLIES = int(sys.argv[2]) if len(sys.argv) > 2 else 4   # random opening plies (data gen random_moves x 2; none with opening `none`)
 
 
 def make_move(board, mv):

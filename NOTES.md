@@ -42,14 +42,14 @@ A generation is **who played the games**. A new generation starts when a clearly
 | **gen0** | HCE (hand-crafted eval) | `hce-10k` (= part1 + part2), `hce-5k`, `hce-100k` | **release net** `pair1024_hce-10k_e9` (shipped in v2.0.0) |
 | **gen1** | release net `pair1024_hce-10k_e9` | `gen1-10k`, `gen1-10k-aws`, `gen1-10k-aws2` (19.87M together), `gen1-1k` | **gen1 e9** `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` (all rows); **best net** `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_from4_e10` (moves 4+) |
 | **gen2** | gen1 e9 | `gen2-10k-aws`, `gen2-20k-aws` | ~4M test nets only (see ~5M nets below); pooled with gen1 in mixes |
-| **gen3** | best net (gen1 data, moves 4+) | `test-gen3-10k-min3-nb` (10-min check); next AWS set | — |
+| **gen3** | best net (gen1 data, moves 4+) | `test-gen3-10k-min3-nb` (10-min check), `gen3-10k-laptop` (4-ply pilot, not used), `test-gen3-10k-min3-nb8` (8-ply check); next AWS set | — |
 
 Recipes (how the games were played and which rows are trained on):
 
 | Recipe | Opening | Search | Rows trained | Used for |
 |---|---|---|---|---|
 | **old** | `searched`: 4 random non-losing plies (first mover gets a head start) | node cap only (10k: ~11% of moves stop at ply 1) | all rows until 2026-10-27, then **moves 4+** (`MIN_MOVE_NUM = 4`, run tag `_from4`) | gen0–gen2 |
-| **new** | `nearbest`: 4 random plies among moves within 0.1 of the best two-ply score | node cap + `minPly 3` (every move sees the reply) | all rows (moves 4+ as an ablation) | gen3 on (needs `engines/gyges-v2.0.0-datagen.exe`, GygesRust branch `datagen-options`) |
+| **new** | `nearbest`: 8 random plies (datagen `random_moves` 4) among moves within 0.1 of the best two-ply score (4 plies gave too few distinct openings: duplicate games) | node cap + `minPly 3` (every move sees the reply) | all rows (moves 4+ as an ablation) | gen3 on (needs `engines/gyges-v2.0.0-datagen.exe`, GygesRust branch `datagen-options`) |
 
 ## Datasets
 
@@ -90,7 +90,9 @@ Older time-limited data (`hce_p3r2_1s_161k`, `hce_p3r2_2s_56k`, the 1s game fold
 | `test-release-10k-min3` | release (gen1) / 10k | old opening + floor 3 (tools-side re-search) | 1,140 | floor test |
 | `test-release-10k-min3-nb` | release (gen1) / 10k | new, tools-side version | 477 | near-best opening test (tools-side, since removed) |
 | `test-release-10k-min3-nb-engine` | release (gen1) / 10k | new (engine options) | 660 | same, engine-side; speed check |
-| `test-gen3-10k-min3-nb` | best net (gen3) / 10k | new | — | draw rate / speed of the gen3 player before AWS |
+| `test-gen3-10k-min3-nb` | best net (gen3) / 10k | new, 4 random plies | — | draw rate / speed of the gen3 player before AWS |
+| `gen3-10k-laptop` | best net (gen3) / 10k | new, 4 random plies | — | overnight pilot (713k rows): floor check; found duplicate games (2.7%) |
+| `test-gen3-10k-min3-nb8` | best net (gen3) / 10k | new, 8 random plies | — | the AWS recipe: duplicates, fairness, speed |
 
 ## Trained Models
 
