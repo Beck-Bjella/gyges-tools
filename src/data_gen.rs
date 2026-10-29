@@ -104,7 +104,7 @@ pub fn generate_data_parallel(
     let repeats = Arc::new(AtomicUsize::new(0));
     if random_plies > 0 {
         println!("[data gen] repeat check after {} random plies: {} openings already played (from {}{})",
-                 random_plies, openings.lock().unwrap().len(), dataset,
+                 random_plies, openings.lock().unwrap_or_else(|e| e.into_inner()).len(), dataset,
                  seen_datasets.iter().map(|d| format!(", {}", d)).collect::<String>());
     }
 
@@ -130,7 +130,7 @@ pub fn generate_data_parallel(
     println!("[parallel] all {} workers done — shards in {}", thread_count, out_dir.display());
     if random_plies > 0 {
         println!("[data gen] repeated openings skipped: {} (openings played: {})",
-                 repeats.load(Ordering::Relaxed), openings.lock().unwrap().len());
+                 repeats.load(Ordering::Relaxed), openings.lock().unwrap_or_else(|e| e.into_inner()).len());
     }
     if panicked > 0 {
         eprintln!("[parallel] {} of {} workers panicked", panicked, thread_count);
@@ -217,7 +217,8 @@ fn data_gen_worker(
 
         let board = gen_board_independent();
         // Check-and-insert in one locked step, so two workers can't both play the same opening.
-        let mut opening_seen = |b: &BoardState| !openings.lock().unwrap().insert(opening_key(b));
+        // A worker that panicked holding the lock leaves the set intact (an insert is all-or-nothing), so keep using it.
+        let mut opening_seen = |b: &BoardState| !openings.lock().unwrap_or_else(|e| e.into_inner()).insert(opening_key(b));
         let result = play_data_game(&mut engine, board, p1_goes_first, &schedules, wild_random, random_plies, &mut opening_seen, debug);
         games_played += 1;
 
