@@ -264,7 +264,7 @@ fn run_data_gen(overrides: &[String]) {
     let schedules = Schedules {
         // nearbest picks its move apart from the search, so the random moves get a ply-1 search only
         depth:     if opening == "nearbest" { [vec![1; random_moves], vec![60]].concat() } else { vec![60] },  // otherwise no depth cap
-        time:      vec![5],          // 5 sec per move (safety cap)
+        time:      vec![30],         // 30 sec per move (safety cap; 5 s cut a few ply-3 searches short of the floor)
         randomize: if opening == "none" { vec![0] } else { [vec![1; random_moves], vec![0]].concat() },  // randomize the first random_moves moves only
         nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move
     };
