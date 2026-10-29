@@ -23,8 +23,12 @@ pub struct EngineConfig {
 /// Build it from the GygesRust repo and copy `target/release/gyges_engine(.exe)` here.
 const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else { "./engines/gyges-v2.0.0" };
 
+/// GygesRust branch datagen-options: 2.0.0 plus the `minPly` and `randomMargin` options
+/// (plays identically to 2.0.0 with both off). Data gen uses it only when one is set.
+const ENGINE_DATAGEN: &str = if cfg!(windows) { "./engines/gyges-v2.0.0-datagen.exe" } else { "./engines/gyges-v2.0.0-datagen" };
+
 fn main() {
-    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|none]` runs data gen with
+    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|nearbest[:margin]|none] [min_ply]` runs data gen with
     // those overrides (for servers, no code edits needed).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("datagen") {
@@ -220,7 +224,7 @@ fn run_data_gen(overrides: &[String]) {
     // The player: 2.0.0 with its embedded net (pair1024_hce-10k_e9) unless a
     // net from engines/weights/ is given (gen2 = played by a gen1-trained net).
     let player = overrides.get(4).map_or("release", String::as_str);
-    let engine = engine_for(player, 0);
+    let mut engine = engine_for(player, 0);
 
     // ---- Schedules ----------------------------------------------------
     // The node cap applies to the randomized opening moves too: uncapped,
@@ -229,13 +233,34 @@ fn run_data_gen(overrides: &[String]) {
     // searched: the first two full moves are random non-losing moves, picked by the
     //           engine after a full search (filtered by what it proved losing)
     // wild:     the first two full moves are uniformly random, picked with no search
+    // nearbest: the first two full moves are random among moves whose two-ply score
+    //           (move, best reply, static eval) is within the margin of the best
+    //           (engine randomMargin; default 0.1 in tanh units, `nearbest:0.05` sets it)
     // none:     no random moves; every move is the engine's choice
     let opening = overrides.get(5).map_or("searched", String::as_str);
-    assert!(["searched", "wild", "none"].contains(&opening), "opening must be searched, wild or none");
-    println!("[data gen] opening: {}", opening);
+    let (opening, margin) = opening.split_once(':').unwrap_or((opening, "0.1"));
+    assert!(["searched", "wild", "nearbest", "none"].contains(&opening), "opening must be searched, wild, nearbest or none");
+
+    // ---- Ply floor ----------------------------------------------------
+    // The node cap applies only once this ply is complete (engine minPly; 3 = every
+    // move sees the reply). 0 = off.
+    let min_ply: u32 = overrides.get(6).map_or(0, |p| p.parse().expect("min_ply must be a number"));
+    if opening == "nearbest" || min_ply > 0 {
+        engine.path = String::from(ENGINE_DATAGEN);
+        if opening == "nearbest" {
+            let m: f64 = margin.parse().expect("margin must be a number");
+            engine.init_commands.push(format!("setoption randomMargin {}", m * 10000.0));
+        }
+        if min_ply > 0 {
+            engine.init_commands.push(format!("setoption minPly {}", min_ply));
+        }
+    }
+    println!("[data gen] opening: {}{}, min ply: {}, engine: {}", opening,
+             if opening == "nearbest" { format!(" (margin {})", margin) } else { String::new() }, min_ply, engine.path);
 
     let schedules = Schedules {
-        depth:     vec![60],         // effectively no depth cap
+        // nearbest picks its move apart from the search, so the random moves get a ply-1 search only
+        depth:     if opening == "nearbest" { vec![1, 1, 60] } else { vec![60] },  // otherwise no depth cap
         time:      vec![5],          // 5 sec per move (safety cap)
         randomize: if opening == "none" { vec![0] } else { vec![1, 1, 0] },  // randomize first two moves only
         nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move

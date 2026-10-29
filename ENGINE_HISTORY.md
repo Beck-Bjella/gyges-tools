@@ -1433,3 +1433,111 @@ Same recipe, same data, same epoch — last night's stopped run vs today's rerun
 - Robust despite it: moves 4+ (replicated on gen1 4.7M, gen1 20M, gen2-10k; +67–76 Elo @10k, where run noise is small), the first-mover ~46% (three players), 1k no-gain, release-relative ladders built from many matches.
 - Blend (+36 @10k significant; +22 @50k n.s.) and gen2-vs-gen1 @50k (+46) are in the zone where a second run is needed.
 Fix for future comparisons: seed init + batch order in train_pair.py (repeatable runs), and train 2+ runs per recipe for anything under ~60 Elo at 50k (or compare at 10k, where run noise is small).
+
+### Why 1k data is worse: the 1k player can't see the reply
+
+1k data (gen1-1k, release net @1k) trains nets nearly as good as 10k data at 10k play (0.399 vs 0.419 vs release) but far worse at 50k (0.391 vs 0.534). Looked at the games. Judge = `pair1024_gen2-20k-aws_from4_e7` (trained on neither set); new small sets test-release-1k / -3k / -10k (release net, searched opening, 10 min each) match the big sets' numbers.
+
+| | 1k | 3k | 10k |
+|---|---|---|---|
+| ply-1 searches (doesn't see the reply), plies 4–9 | 80% | 57% | 24% |
+| ply-1, plies 10–19 / 20+ | 43% / 34% | 20% / 15% | 5% / 3% |
+| judge picks the winner, plies 20–29 / 30+ | 80.7 / 82.0% | 85.3 / 84.6% | 87.2 / 89.8% (gen1-10k-aws 90.1 / 92.2%) |
+| loser was clearly ahead (judge > 0.5) at some point, ply 4+ | 33% | 31% | 24% |
+| first mover wins | 52.8% | 54.4% | 56.2% |
+
+In 1k games a position that looks clearly won late still ends lost ~1 in 5: the labels record shallow blunders, not the position. Quality rises steadily with the share of moves that see the opponent's reply — no cliff at a magic node count; 3k sits between, nearer 1k on thrown games.
+
+Cost of finishing ply 3 (3,000 positions from gen1-10k-aws, ply 4+, searched to exactly ply 3, no node cap; `relabel` got an optional ply cap): nodes median 1.7k, mean 4.4k, p90 11.7k, p99 36.5k; done within 1k 38%, 3k 64%, 10k 87%, 20k 96%. Early positions are the expensive ones (plies 4–9 median 4k, 77% within 10k). Per move: 10k cap + always finish ply 3 ≈ 1.1× the 10k cost; exact ply 3 (no cap) ≈ 3.7k nodes, ~0.37×. 20k data (ply 1 cut to 4%) = 10k at ~5M, so a ply-3 floor on 10k likely buys little; the open test is exact-ply-3 data (never blind, ~2.7× cheaper than 10k) vs 10k data.
+
+### Ply-3 floor at 10k: much cleaner games, ~1.2× cost, and a bigger first-mover gift
+
+User's idea: never let a data-gen move be blind to the reply. New data gen option `min_ply` (datagen arg 7): a searched move that stopped below it (and wasn't decided) is searched again to exactly that ply with no node cap; random plies untouched. test-release-10k-min3 (release net, 10k + floor 3, searched opening, 10 min) vs test-release-10k (same, no floor); judge `pair1024_gen2-20k-aws_from4_e7`:
+
+| | 10k | 10k + floor 3 |
+|---|---|---|
+| depth of searched moves (ply 4+): 1 / 3 / 5+ | 10.7 / 50.1 / 24.9% | 0 / 62.1 / 22.6% |
+| loser was clearly ahead at some point (ply 4+) | 24.4% | **14.9%** (±1.2–1.4 each) |
+| judge picks the winner, plies 4–5 / 6–9 / 10–14 / 20–29 | 70.7 / 71.1 / 79.5 / 87.2% | 80.0 / 79.1 / 84.2 / 89.1% |
+| first mover wins | 56.2% | **65.3%** |
+| positions/h per worker | 11.8k | 9.7k (1.22× cost) |
+| moves/game | 18.1 | 17.0 |
+
+Cleaner by every game-quality measure (thrown games down by 40%) — I'd expected little from the 20k comparison; wrong. But the floor also hands the first mover more of the opening gift: blind moves were concentrated in the first searched moves (plies 4–9, 24% at 10k), so ply 4 — always the first mover's — now always sees the reply. 65.3% is above even gen2-20k (62.4%). Fits the head-start mechanism, and makes a fair opening (random 4 or 5 plies) more urgent if the floor is adopted.
+
+### Near-best opening: data that looks like real openings, with variety
+
+The engine's `skill-*` options can't randomize openings: the pick comes from a hash of the board (same position → same move), and non-best root scores are null-window bounds, not exact. So near-best is scored in the tools: each legal move = the move, the opponent's best reply, static eval (ply-1 search of the child, no node cap). Probe on 200 real opening positions (test-none-release-10k plies 0–7): a uniformly random non-losing move (today's opening) gives away 0.26 (plies 0–1) – 0.48 (6–7); moves within 0.1 of the best: median 18 / 8.5 / 3 / 3 for plies 0–1 / 2–3 / 4–5 / 6–7 (within 0.05: 5 / 3 / 2 / 2; within 0.2: 75 / 46 / 12 / 8).
+
+New opening `nearbest[:margin]` (datagen arg 6): the first 4 plies are random among moves within the margin (default 0.1) of the best; a goal move is always taken. ~18·18·8.5·8.5 ≈ 23k openings per start board, ~380M over the 16,200 starts. test-release-10k-min3-nb (release net, 10k + floor 3, nearbest 0.1, 10 min, 477 games written, ~6% draws), judge `pair1024_gen2-20k-aws_from4_e7`:
+
+| | old opening (10k) | old opening + floor | **near-best + floor** | real openings (no random plies, release 10k) |
+|---|---|---|---|---|
+| first mover wins | 56.2% | 65.3% | **46.3%** | 46.4% |
+| \|eval\| > 0.5 at ply 4 / ply 6 | 40.1 / 40.6% | 41.8 / 46.7% | **13.6 / 24.8%** | 15.4 / 27.3% |
+| judge cost of moves at plies 1 / 2 / 3 | 0.34 / 0.51 / 0.55 | 0.35 / 0.50 / 0.57 | **0.06 / 0.21 / 0.19** | 0.04 / 0.18 / 0.19 |
+| games over by ply 10 | 20.1% | 19.6% | **2.1%** | 2.8% |
+| distinct positions at ply 6 | 100% | 100% | **100%** (476) | 80% (after 1,688 games) |
+| loser was clearly ahead at some point | 24.4% | 14.9% | 19.9% | 31.0% (no floor) |
+| judge picks the winner, plies 0–3 / 4–5 | 50.4 / 70.7% | 47.5 / 80.0% | 56.7 / 67.2% | 52.6 / 57.6% |
+
+Near-best openings match real openings on every opening measure, with full variety. Thrown games: between realistic openings, the floor takes 31.0% → 19.9%; the old-opening sets swing less because their games are lopsided from the start. The 80% at plies 4–5 under the old opening + floor was the gift, as expected — fair positions are harder to call. With a fair opening, moves 0–3 no longer need dropping.
+
+Cost: 9,245 rows in 10 min vs 24,345 for plain 10k (2.6× slower per row; ~2.0× per usable row, as all rows are now usable vs 77% with moves 4+). The tools-side scoring is the cost (~1.5 s per opening ply, every legal move searched); an engine-side near-best (threshold null-window test of each root move) would make it nearly free — then the new recipe would cost about the same per usable row as the old one (floor-only rate 19.4k rows/10 min, all usable, vs 18.7k usable for plain 10k).
+
+### Floor and near-best moved into the engine
+
+User: no tools-side re-search or move scoring for what belongs in the engine. GygesRust branch `datagen-options` (local, not pushed; commit 052bfd1 on v2.0.0), two options, both off by default:
+- `minPly N`: the node cap applies only once ply N is complete (shared flag across search threads) — no re-search.
+- `randomMargin M` (engine score units, 1000 = 0.1): with `randomize`, the pick is uniform among root moves whose two-ply score (move, best reply, static eval) is within M of the best; replies tried best-first, a move is dropped at the first reply that puts it below the bar.
+
+Built with Rust 1.80 → `engines/gyges-v2.0.0-datagen.exe` (md5 69bda5df80a7a8c5fa7c68f98bdd6feb). Checks: with both options off it plays identically to v2.0.0 (move, score and nodes on 300/300 positions @10k); `minPly 3` @10k never ends at ply 1; `randomMargin 1000` picks stayed inside the exact near-best pool on 20/20 opening positions (picks covered 219 of 231 pool moves in 60 tries each), 134 ms per pick vs ~1.5 s tools-side. Tools: the tools-side floor/near-best/relabel-ply code is reverted; data gen sends `minPly` / `randomMargin` and uses the datagen build only when `nearbest` or a ply floor is asked for (`datagen … nearbest[:margin] <min_ply>`); random opening plies get a ply-1 main search under `nearbest` (the pick doesn't use it).
+
+test-release-10k-min3-nb-engine (release, 10k + minPly 3 + nearbest 0.1; stopped after ~4 min, 660 games): check_datagen passes (47 columns, search data recorded as before; opening plies score nan). Searched moves ply 4+: depth 0 / 1 / 3 / 5+ = 12.6 / 0 / 64.0 / 23.2%.
+
+| | plain 10k (old opening) | tools-side nb + floor | **engine nb + floor** | real openings |
+|---|---|---|---|---|
+| positions/h per worker | 11.8k | ~4.5k | **11.2k** | — |
+| usable rows/h per worker (moves 4+ needed for the old opening: 77%) | 9.1k | ~4.5k | **11.2k** | — |
+| first mover wins | 56.2% | 46.3% (477 games) | 51.4% (660) | 46.4% (1,688) |
+| \|eval\| > 0.5 at ply 4 / 6 | 40.1 / 40.6% | 13.6 / 24.8% | 14.1 / 25.2% | 15.4 / 27.3% |
+| judge cost of moves at plies 1 / 2 / 3 | 0.34 / 0.51 / 0.55 | 0.06 / 0.21 / 0.19 | 0.07 / 0.20 / 0.22 | 0.04 / 0.18 / 0.19 |
+| games over by ply 10 | 20.1% | 2.1% | 2.6% | 2.8% |
+| loser clearly ahead at some point | 24.4% | 19.9% | 23.8% | 31.0% (no floor) |
+
+Engine-side runs at 95% of plain-10k speed (the cheap ply-1 opening searches offset the floor) and every row is usable: ~1.23× more usable rows per hour than the old recipe. Opening measures match the tools-side version and real openings. First mover 51.4% vs 46.3% tools-side (same pick pool, verified) is a 1.7σ gap; pooled 49.3 ± 1.5 vs 46.4 ± 1.2 real — a small leftover edge or noise; far from 56–65%. The all-rows vs moves 4+ ablation on the AWS data will show whether the opening rows are clean.
+
+### ~5M nets: one table
+
+User asked for the generation names and the ~5M comparison nets in one clean place. NOTES.md now has a **Generations** sheet (gen0 = HCE games, gen1 = release net's, gen2 = gen1 e9's, gen3 = best net's — moves 4+ counted as a generation jump), the two recipes (old / new), a test-set table and a ~5M nets table. Every ~5M net below has its .bin in engines/weights/ and a runs.csv row. All results are direct matches (pair score, Elo), single training runs — at 50k read differences under ~60 Elo as unsettled (run-to-run ≈ 40 Elo).
+
+| Net (data, rows) | vs release @10k | vs release @50k | Head to head |
+|---|---|---|---|
+| gen0: `hce-10k-part1_e6` (4.57M) | 0.371 (−91) | 0.406 (−66) | — |
+| gen1: `gen1-10k+gen1-10k-aws_e6` (4.70M) | 0.419 (−57) | 0.534 (+23) | vs gen0: 0.559 @10k, 0.591 @50k |
+| gen1 moves 4+: `…_from4_e6` (3.66M) | — | — | vs gen1 all rows: **0.550 @10k (+35)** |
+| gen1 moves 4+, short games dropped: `…_from4_min11_e5` (3.52M) | — | — | vs `…_from4_e6`: 0.529 @10k (+20, n.s.) |
+| gen1 @1k: `gen1-1k_e5` (4.73M) | 0.399 (−71) | 0.391 (−77) | — (10k data: −57 / +23) |
+| gen1 @1k moves 4+: `gen1-1k_from4_e5` (3.65M) | — | — | vs `gen1-1k_e5`: 0.484 @10k (−11, n.s.) |
+| gen2: `gen2-10k-aws_e6` (4.85M) | 0.443 (−40) | 0.524 (+17) | vs gen1 all rows: 0.519 @50k (+13, n.s.) |
+| gen2 moves 4+: `gen2-10k-aws_from4_e6` (3.77M) | **0.551 (+36)** | — | vs gen1 moves 4+: 0.530 @10k (+21), **0.566 @50k (+46)** |
+| gen2 @20k moves 4+: `gen2-20k-aws_from4_e7` (3.89M) | 0.485 (−10) | — | vs gen2 @10k moves 4+: 0.504 @10k, 0.496 @50k (level); vs gen1 moves 4+: 0.698 @50k (+145 — doesn't fit the rest, likely run noise) |
+| gen2 @20k moves 4+, blend labels: `…_blend0.5_e8` (3.89M) | — | — | vs `gen2-20k-aws_from4_e7`: 0.551 @10k (+36), 0.531 @50k (+22, n.s.) — ablation only |
+
+What the ~5M nets say: newer player → better rows (gen0 < gen1 < gen2), but gen2's edge only shows once the opening rows are dropped (its random-opening gift was bigger: first mover 59.7% vs 57.4%); moves 4+ helps where the opening bias is big (gen1 10k, gen2) and not on 1k data (53%); 1k data is as good as 10k at 10k play and far worse at 50k (blind ply-1 search); 20k data = 10k data. Reference for the next set: a ~5M gen3 set (new recipe) trains a net to compare against `gen2-10k-aws_from4_e6` (the best ~5M net so far) and `gen1-10k+gen1-10k-aws_from4_e6`.
+
+### gen3 player check: the best net with the new recipe
+
+test-gen3-10k-min3-nb (best net `…_from4_e10`, 10k + minPly 3 + nearbest 0.1, 10 min, 12 workers): 853 games played, 832 written — **2.5% draws** (the 81% was the no-randomness case; near-best openings give enough variety). check_datagen passes; searched moves ply 4+: depth 0 / 1 / 3 / 5+ = 11.7 / 0 / 64.9 / 23.0%. First mover wins **48.0%** (±1.7; real openings 46.4%). Opening moves cost 0.09 / 0.12 / 0.12 at plies 1–3 by the judge (release-played: 0.07 / 0.20 / 0.22) — the judge agrees more with the best net's picks; lopsided at ply 4 / 6: 10.1 / 18.7%; games over by ply 10: 1.6%; thrown games 22.2%; 829/830 distinct at ply 6. Speed 8.7k positions/h per worker vs 11.2k for the release net — but the laptop was on battery (PowerOnline False), so part of that may be throttling; mean game 21.0 plies vs 19.9.
+
+### Predictions for gen3, written before the data exists (2026-10-29)
+
+Reading so far (user): the opening bias was the main problem — moves 4+ gained exactly as much as the bias was big (gen1-1k 53% → no gain, gen1 57% → +35, gen2 60% → +76) and moved the nets' real-opening calls from 56–64% "first mover ahead" to 43–45% (truth 46%). Moves 4+ stopped teaching something false; it taught nothing new. The other problem: blind ply-1 moves at 10k (~11% of moves, 24% at plies 4–9) — untested for strength on its own, but every game-quality measure points to it (1k vs 10k, floor test). gen3 (best net as player, nearbest 0.1 + minPly 3, all rows) fixes the bias in every row (first mover 48% vs 57–62% all game), trains on honest opening rows for the first time (~23% of rows; today's best net has never seen one), and cleans labels with the floor and a stronger player. The gen3 test can't split floor from opening from player — it tests the stack.
+
+Predictions for the ~5M gen3 set:
+1. Ablation flips: all rows ≥ moves 4+ on gen3 data (old data: moves 4+ won by +35 to +76).
+2. Openings: the gen3 net picks the winner at moves 0–5 on the real-opening test sets (test-none-*) better than the best net (51–56% now), and calls the first mover ahead ~46%.
+3. Strength: gen3 5M net vs `pair1024_gen2-10k-aws_from4_e6` (best ~5M net) @50k ≥ 0.60 (≈ +70); vs `pair1024_gen1-10k+gen1-10k-aws_from4_e6` ≥ 0.65 (≈ +110).
+Reading: 1 and 2 hold but 3 short → the opening fix works and something else (volume?) limits strength; all three → a generation jump; 3 below 0.55 → something in the stack isn't working.
+
+**The real test is the early game** (user): both fixes act there — the new opening on plies 0–3 (honest opening rows) and fairness of every row; the floor mostly on plies 4–9 (24% blind at 10k; later moves almost always reach ply 3 anyway). So prediction 2, sharpened: on the real-opening test sets (test-none-10k, test-none-release-10k, test-none-best-10k; `phase_analysis.py`), the gen3 net picks the winner more often than the best net at moves 0–5 (best: 55.5% on test-none-10k) and 6–12 (71.6%), keeps calling the first mover ahead ~46% (best 44.7%), and is about level from move 15 on (~90%, neither fix targets it). Early gain + late level = the fixes work where they should; no early gain = something in the pipeline isn't doing what we think, whatever the overall strength.

@@ -42,6 +42,8 @@ LABELS      = "result"  # "result" = game result (release recipe). "blend" = pro
                         # result, the rest LAMBDA * result + (1 - LAMBDA) * calibrated search score
                         # (47-col data only; other data keeps the result). Tag the run if changed.
 LAMBDA      = 0.5
+SEED        = None   # None = unseeded init, dropout and batch order (all runs up to 2026-10-29);
+                     # N = seeded, so the run repeats. The 80/20 split is always seed 42.
 RUN_NAME    = (f"pair{HIDDEN_SIZE}" + (f"x{TAIL}" if TAIL else "") + f"_{DATASET}"
                + (f"_{TAG}" if TAG else ""))
 
@@ -287,6 +289,8 @@ if __name__ == '__main__':
     del train, val
 
     LR = 1e-3
+    if SEED is not None:
+        torch.manual_seed(SEED)
     model     = GygesNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     loss_fn   = nn.MSELoss()
@@ -305,7 +309,7 @@ if __name__ == '__main__':
     print(f"Run: {run_dir}  (started {started})")
     config = (f"dataset {DATASET}\nhidden {HIDDEN_SIZE}\ndropout {DROPOUT}\nlr {LR}\n"
               f"lr_decay {LR_DECAY}\nbatch {batch_size}\npatience {patience}\nsingletons {SINGLETONS}\ntail {TAIL}\n"
-              f"labels {LABELS}" + (f" lam {LAMBDA}" if LABELS == "blend" else "") + "\n")
+              f"labels {LABELS}" + (f" lam {LAMBDA}" if LABELS == "blend" else "") + f"\nseed {SEED}\n")
     with open(os.path.join(run_dir, "config.txt"), "w") as f:
         f.write(config)
     print("Config: " + ", ".join(config.splitlines()))
@@ -318,7 +322,8 @@ if __name__ == '__main__':
         "note": "; ".join(x for x in ("" if SINGLETONS else "pairs only (no single-piece features)",
                                      f"tail {HIDDEN_SIZE}->{TAIL}->1" if TAIL else "",
                                      f"labels blend lam {LAMBDA} (calibrated search score, proven exact)"
-                                     if LABELS == "blend" else "") if x),
+                                     if LABELS == "blend" else "",
+                                     f"seed {SEED}" if SEED is not None else "") if x),
     })
 
     best_val, since_best = float("inf"), 0

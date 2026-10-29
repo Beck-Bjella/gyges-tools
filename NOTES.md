@@ -21,7 +21,7 @@ Names say what the thing is; this file is the registry with the details.
 | Thing | Pattern | Example |
 |---|---|---|
 | Dataset | `{who played}-{nodes per move}[-tag]`. HCE data is `hce-…`; NN self-play is `gen{N}-…` | `hce-10k`, `gen1-5k` |
-| Generations | gen1 = played by the release net (trained on HCE data), gen2 = played by a net trained on gen1 data, ... | |
+| Generations | gen{N} = who played the games — see **Generations** below | |
 | Dataset files | `training/data/<dataset>/w{NN}.csv` (one shard per data-gen worker) | `training/data/gen1-5k/w03.csv` |
 | Mix | datasets joined with `+`, no file of its own | `hce-10k+hce-100k` |
 | Training run | `{encoding}{width}_{dataset}[_tag]` → `training/weights/<run>/e{N}.bin` | `pair1024_hce-10k/e9.bin` |
@@ -32,6 +32,24 @@ Encodings: `pair{H}` = 5886 → H → 1, `pair{H}x32` = with a 32 tail, `flat{H}
 **No tag = the release recipe** (`train_pair.py` defaults): dropout 0.5, Adam lr 1e-3, batch 4096, mirror augment, seeded 80/20 split. A tag names what differs from it (`_drop0.3` = dropout 0.3, everything else default; `_lrdecay0.3` = lr ×0.3 after each epoch without a new best val; `_mm2` = positions with move_num < 2 dropped). Since 2026-10-25 runs stop after 3 epochs without a new best val, and each run folder has `config.txt` + `log.txt`.
 The v2.0.0 engine only loads `pair1024` nets; other widths need a dev build with `L1_SIZE` changed.
 Game ids in new datasets are `(hash(dataset name) % 100000 * 1000 + worker) * 10M + game`, so they don't repeat across datasets.
+
+## Generations
+
+A generation is **who played the games**. A new generation starts when a clearly stronger net becomes the player; dropping the random-opening rows (moves 4+) counts as one, since it made the gen1 net ~+70 Elo stronger on the same games.
+
+| Gen | Games played by | Datasets | Nets trained on it |
+|---|---|---|---|
+| **gen0** | HCE (hand-crafted eval) | `hce-10k` (= part1 + part2), `hce-5k`, `hce-100k` | **release net** `pair1024_hce-10k_e9` (shipped in v2.0.0) |
+| **gen1** | release net `pair1024_hce-10k_e9` | `gen1-10k`, `gen1-10k-aws`, `gen1-10k-aws2` (19.87M together), `gen1-1k` | **gen1 e9** `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_e9` (all rows); **best net** `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2_from4_e10` (moves 4+) |
+| **gen2** | gen1 e9 | `gen2-10k-aws`, `gen2-20k-aws` | ~4M test nets only (see ~5M nets below); pooled with gen1 in mixes |
+| **gen3** | best net (gen1 data, moves 4+) | `test-gen3-10k-min3-nb` (10-min check); next AWS set | — |
+
+Recipes (how the games were played and which rows are trained on):
+
+| Recipe | Opening | Search | Rows trained | Used for |
+|---|---|---|---|---|
+| **old** | `searched`: 4 random non-losing plies (first mover gets a head start) | node cap only (10k: ~11% of moves stop at ply 1) | all rows until 2026-10-27, then **moves 4+** (`MIN_MOVE_NUM = 4`, run tag `_from4`) | gen0–gen2 |
+| **new** | `nearbest`: 4 random plies among moves within 0.1 of the best two-ply score | node cap + `minPly 3` (every move sees the reply) | all rows (moves 4+ as an ablation) | gen3 on (needs `engines/gyges-v2.0.0-datagen.exe`, GygesRust branch `datagen-options`) |
 
 ## Datasets
 
@@ -61,9 +79,37 @@ Everything up to `hce-10k` was generated under the pre-2.0.0 rules (board-unchan
 
 Older time-limited data (`hce_p3r2_1s_161k`, `hce_p3r2_2s_56k`, the 1s game folders) has no registry name — being deleted.
 
+**Test sets** (small, laptop, 47 columns; for measuring data and nets, never trained on). Details in `results/datasets.csv`.
+
+| Dataset | Played by (gen) / nodes | Recipe | Games | Purpose |
+|---|---|---|---|---|
+| `test-gen2-10k-search` | gen1 e9 (gen2) / 10k | old | 767 | proof timing vs gen2-20k-aws |
+| `test-none-best-10k` | best net (gen3) / 10k | no random plies | 389 decisive (81% draws) | real openings, best net |
+| `test-none-release-10k` | release (gen1) / 10k | no random plies | 1,688 | real openings — the reference for "real play" (first mover 46.4%) |
+| `test-release-1k` / `-3k` / `-10k` | release (gen1) / 1k, 3k, 10k | old | 12,719 / 4,080 / 1,344 | node-budget comparison (blind ply-1 moves, game quality) |
+| `test-release-10k-min3` | release (gen1) / 10k | old opening + floor 3 (tools-side re-search) | 1,140 | floor test |
+| `test-release-10k-min3-nb` | release (gen1) / 10k | new, tools-side version | 477 | near-best opening test (tools-side, since removed) |
+| `test-release-10k-min3-nb-engine` | release (gen1) / 10k | new (engine options) | 660 | same, engine-side; speed check |
+| `test-gen3-10k-min3-nb` | best net (gen3) / 10k | new | — | draw rate / speed of the gen3 player before AWS |
+
 ## Trained Models
 
 Run folders in `training/weights/`. "Net" = the epoch that got used, if one was.
+
+**~5M comparison nets** — one per data source, all release recipe, h1024 pair, size-matched (~4.6–4.9M games' worth of rows). These are the nets to compare data sources and recipes with; results in ENGINE_HISTORY ("~5M nets: one table").
+
+| Net | Data (gen) | Player / nodes | Rows trained | What it isolates |
+|---|---|---|---|---|
+| `pair1024_hce-10k-part1_e6` | hce-10k-part1 (gen0) | HCE / 10k | 4.57M | gen0 baseline |
+| `pair1024_gen1-10k+gen1-10k-aws_e6` | gen1 4.7M (gen1) | release / 10k | 4.70M | gen1 baseline, all rows |
+| `pair1024_gen1-10k+gen1-10k-aws_from4_e6` | same | same | 3.66M (moves 4+) | moves 4+ on gen1 |
+| `pair1024_gen1-10k+gen1-10k-aws_from4_min11_e5` | same | same | 3.52M (moves 4+, games ≤ 10 rows dropped) | short-game filter |
+| `pair1024_gen1-1k_e5` | gen1-1k (gen1) | release / **1k** | 4.73M | data-gen depth: 1k vs 10k |
+| `pair1024_gen1-1k_from4_e5` | same | same | 3.65M (moves 4+) | moves 4+ on 1k data |
+| `pair1024_gen2-10k-aws_e6` | gen2-10k-aws (gen2) | gen1 e9 / 10k | 4.85M | gen2 vs gen1, all rows |
+| `pair1024_gen2-10k-aws_from4_e6` | same | same | 3.77M (moves 4+) | gen2 vs gen1, moves 4+ |
+| `pair1024_gen2-20k-aws_from4_e7` | gen2-20k-aws (gen2) | gen1 e9 / **20k** | 3.89M (moves 4+) | data-gen depth: 20k vs 10k |
+| `pair1024_gen2-20k-aws_from4_blend0.5_e8` | same | same | 3.89M (moves 4+, blend labels) | label ablation (search score blended in) |
 
 | Run | Original name | Epochs (used) | Val loss / notes |
 |---|---|---|---|
@@ -105,6 +151,7 @@ Run folders in `training/weights/`. "Net" = the epoch that got used, if one was.
 | `pair1024_gen2-20k-aws_from4_blend0.5` | — (2026-10-27) | 11, stopped itself (**e8**) | 0.13914 @ e8 (val on blended targets — not comparable); same 3.89M rows as `…_from4`, `LABELS = "blend"`, λ 0.5: 1.72M proven rows → 0.75 × proven result, 2.17M → 0.5 × 0.75 × result + 0.5 × 0.75 × calibrated search score (score 0 → −0.263, ±0.5 → +0.670 / −0.875). Net `pair1024_gen2-20k-aws_from4_blend0.5_e8` |
 | `pair1024_gen1-10k+gen1-10k-aws+gen1-10k-aws2+gen2-10k-aws+gen2-20k-aws_from4` | — (2026-10-28) | 18, stopped itself (**e12**) | 0.27593 @ e12 (best 0.27586 @ e15); release recipe, moves 4+, result labels on gen1 19.87M + gen2-10k 4.85M + gen2-20k 5.03M = 29.75M → 23.1M rows. First attempt stopped at e8 (shutdown) — kept as `…_from4_stopped-e8`. Net `…+gen2-20k-aws_from4_e12` |
 | `pair1024_gen1-10k+gen1-10k-aws_from4_min11` | — (2026-10-27) | 8, stopped itself (**e5**) | 0.3074 @ e5; release recipe on gen1 4.7M with games of ≤ 10 rows dropped (`MIN_GAME_MOVES = 11`, −7.0% rows) and then moves 0–3 (3.52M rows). Val above `_from4` (0.3010) as expected — the dropped short games are mostly easy, proven positions. Net `pair1024_gen1-10k+gen1-10k-aws_from4_min11_e5` |
+| `pair1024_gen1-1k_from4` | — (2026-10-28) | 8, stopped itself (**e5**) | release recipe on gen1-1k with moves 0–3 dropped: 3.65M rows. Moves 4+ on the 1k data (least opening bias). Net `pair1024_gen1-1k_from4_e5` |
 | — | nnue_h1024_pairs_10k_plus_100kx8 (20260429_213158) | — | trained on `hce-10k+hce-100kx8`, never saved a checkpoint; empty dir removed |
 
 Empty run dirs removed 2026-10-23 (no checkpoints): 20260424_141232, 20260427_013035, 20260427_015132, 20260429_213158.
