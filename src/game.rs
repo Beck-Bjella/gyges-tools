@@ -335,6 +335,8 @@ pub struct DataGame {
     pub time_cap_hits: usize,
     /// The engine forfeited (illegal move, crash, timeout). Don't train on it.
     pub forfeit: bool,
+    /// The position after the random opening plies was already played: stopped there, not written.
+    pub repeat: bool,
     /// Per position, the search that chose its move, as `search_columns` text.
     pub search: Vec<String>,
 }
@@ -367,6 +369,8 @@ pub fn play_data_game(
     p1_goes_first: bool,
     schedules: &Schedules,
     wild_random: bool,
+    random_plies: usize,
+    opening_seen: &mut dyn FnMut(&BoardState) -> bool,
     debug: bool,
 ) -> DataGame {
     let mut board = starting_board;
@@ -375,11 +379,17 @@ pub fn play_data_game(
     }
 
     let mut recorded: Vec<(BoardState, f64)> = vec![];
-    let mut game = DataGame { positions: vec![], depths: vec![], time_cap_hits: 0, forfeit: false, search: vec![] };
+    let mut game = DataGame { positions: vec![], depths: vec![], time_cap_hits: 0, forfeit: false, repeat: false, search: vec![] };
     let mut move_history: Vec<Vec<usize>> = vec![];
     let mut turn = 0usize;
 
     loop {
+        // The engine is deterministic after the random plies, so a game reaching an opening
+        // position that was already played would be an exact copy: stop it before any search.
+        if random_plies > 0 && turn == random_plies && opening_seen(&board) {
+            game.repeat = true;
+            return game;
+        }
         let first_mover_turn = turn % 2 == 0;
         let current_player = if p1_goes_first == first_mover_turn { 0 } else { 1 };
         let player_sign = if current_player == 0 { 1.0 } else { -1.0 };

@@ -11,9 +11,12 @@
 //! right away, so stopping the program (or a time budget running out) loses at
 //! most the games in progress.
 
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -37,6 +40,38 @@ fn dataset_key(name: &str) -> usize {
     (h % 100_000) as usize
 }
 
+/// Openings already played: the 36 squares of each game's position after the random plies.
+type Openings = Arc<Mutex<HashSet<[u8; 36]>>>;
+
+fn opening_key(board: &BoardState) -> [u8; 36] {
+    std::array::from_fn(|i| board.data[i] as u8)
+}
+
+/// Positions at move `random_plies` in every shard of these dataset folders, so a resumed run
+/// (its own folder) or a later run (`seen` datasets) never repeats an opening already written.
+fn load_openings(dirs: &[PathBuf], random_plies: usize) -> HashSet<[u8; 36]> {
+    let mut set = HashSet::new();
+    let want = random_plies.to_string();
+    for dir in dirs {
+        assert!(dir.is_dir() || dir == &dirs[0], "seen dataset {} not found", dir.display());
+        let Ok(entries) = fs::read_dir(dir) else { continue };
+        for path in entries.flatten().map(|e| e.path()) {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !(name.starts_with('w') && name.ends_with(".csv")) { continue; }
+            let Ok(file) = fs::File::open(&path) else { continue };
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
+                let cols: Vec<&str> = line.splitn(40, ',').collect();
+                if cols.len() < 39 || cols[37] != want { continue; }
+                let mut key = [0u8; 36];
+                if cols[..36].iter().zip(key.iter_mut()).all(|(c, k)| c.parse().map(|v| *k = v).is_ok()) {
+                    set.insert(key);
+                }
+            }
+        }
+    }
+    set
+}
+
 /// Spawns `thread_count` workers, each playing until it has played
 /// `games_per_worker` games or `max_hours` have passed, whichever comes first.
 pub fn generate_data_parallel(
@@ -47,6 +82,7 @@ pub fn generate_data_parallel(
     games_per_worker: usize,
     max_hours: Option<f64>,
     thread_count: usize,
+    seen_datasets: &[String],
     debug: bool,
 ) {
     let out_dir = Path::new("training").join("data").join(dataset);
@@ -59,13 +95,28 @@ pub fn generate_data_parallel(
         out_dir.display(),
     );
 
+    // Repeat check after the random plies (none without a random opening).
+    let random_moves = schedules.randomize.iter().take_while(|&&r| r != 0).count();
+    let random_plies = if random_moves < schedules.randomize.len() { 2 * random_moves } else { 0 };
+    let mut dirs = vec![out_dir.clone()];
+    dirs.extend(seen_datasets.iter().map(|d| Path::new("training").join("data").join(d)));
+    let openings: Openings = Arc::new(Mutex::new(if random_plies > 0 { load_openings(&dirs, random_plies) } else { HashSet::new() }));
+    let repeats = Arc::new(AtomicUsize::new(0));
+    if random_plies > 0 {
+        println!("[data gen] repeat check after {} random plies: {} openings already played (from {}{})",
+                 random_plies, openings.lock().unwrap().len(), dataset,
+                 seen_datasets.iter().map(|d| format!(", {}", d)).collect::<String>());
+    }
+
     let key = dataset_key(dataset);
     let handles: Vec<_> = (0..thread_count).map(|worker_id| {
         let engine = engine.clone();
         let schedules = schedules.clone();
         let path = out_dir.join(format!("w{:02}.csv", worker_id));
         let id_base = (key * 1000 + worker_id) * GAMES_PER_WORKER_MAX;
-        thread::spawn(move || data_gen_worker(worker_id, &path, id_base, games_per_worker, deadline, engine, schedules, wild_random, debug))
+        let (openings, repeats) = (openings.clone(), repeats.clone());
+        thread::spawn(move || data_gen_worker(worker_id, &path, id_base, games_per_worker, deadline, engine, schedules, wild_random,
+                                              random_plies, openings, repeats, debug))
     }).collect();
 
     let mut panicked = 0;
@@ -77,6 +128,10 @@ pub fn generate_data_parallel(
     }
 
     println!("[parallel] all {} workers done — shards in {}", thread_count, out_dir.display());
+    if random_plies > 0 {
+        println!("[data gen] repeated openings skipped: {} (openings played: {})",
+                 repeats.load(Ordering::Relaxed), openings.lock().unwrap().len());
+    }
     if panicked > 0 {
         eprintln!("[parallel] {} of {} workers panicked", panicked, thread_count);
         std::process::exit(1);
@@ -120,6 +175,9 @@ fn data_gen_worker(
     engine_cfg: EngineConfig,
     schedules: Schedules,
     wild_random: bool,
+    random_plies: usize,
+    openings: Openings,
+    repeats: Arc<AtomicUsize>,
     debug: bool,
 ) {
     let mut engine = start_engine(&engine_cfg.path, &engine_cfg.init_commands);
@@ -141,6 +199,7 @@ fn data_gen_worker(
     let mut games_written = 0usize;
     let mut draws = 0usize;
     let mut forfeits = 0usize;
+    let mut skipped = 0usize;
     let mut p1_wins = 0usize;
     let mut p2_wins = 0usize;
     let mut total_moves = 0usize;
@@ -157,7 +216,9 @@ fn data_gen_worker(
         let p1_goes_first = game % 2 == 0;
 
         let board = gen_board_independent();
-        let result = play_data_game(&mut engine, board, p1_goes_first, &schedules, wild_random, debug);
+        // Check-and-insert in one locked step, so two workers can't both play the same opening.
+        let mut opening_seen = |b: &BoardState| !openings.lock().unwrap().insert(opening_key(b));
+        let result = play_data_game(&mut engine, board, p1_goes_first, &schedules, wild_random, random_plies, &mut opening_seen, debug);
         games_played += 1;
 
         total_time_caps += result.time_cap_hits;
@@ -165,7 +226,10 @@ fn data_gen_worker(
             println!("[w{}] game {} — hit time cap {} time(s)", worker_id, game + 1, result.time_cap_hits);
         }
 
-        if result.forfeit {
+        if result.repeat {
+            skipped += 1;
+            repeats.fetch_add(1, Ordering::Relaxed);
+        } else if result.forfeit {
             forfeits += 1;
             if !engine.is_alive() {
                 engine = start_engine(&engine_cfg.path, &engine_cfg.init_commands);
@@ -204,18 +268,18 @@ fn data_gen_worker(
                 if depth_buckets[b].1 > 0 { depth_buckets[b].0 / depth_buckets[b].1 as f64 } else { 0.0 }
             };
             let hours = started.elapsed().as_secs_f64() / 3600.0;
-            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | forfeits {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | positions: {} ({:.0}/h) | time caps: {} ---",
+            println!("[w{}] --- {}/{} | written {} | P1 {} P2 {} | draws {} | forfeits {} | avg {:.1} moves | depth: mv1-5 {:.2}, mv6-10 {:.2}, mv11+ {:.2} | positions: {} ({:.0}/h) | time caps: {} | repeats skipped: {} ---",
                 worker_id, game + 1, game_count, games_written, p1_wins, p2_wins, draws, forfeits, avg_moves,
                 bucket_avg(0), bucket_avg(1), bucket_avg(2),
-                total_positions, total_positions as f64 / hours.max(1e-9), total_time_caps);
+                total_positions, total_positions as f64 / hours.max(1e-9), total_time_caps, skipped);
         }
     }
 
     engine.send("quit");
 
     println!(
-        "[w{}] done — {} games played, {} written ({} positions) → {}",
-        worker_id, games_played, games_written, total_positions, path.display()
+        "[w{}] done — {} games played, {} written ({} positions), {} repeated openings skipped → {}",
+        worker_id, games_played, games_written, total_positions, skipped, path.display()
     );
 }
 

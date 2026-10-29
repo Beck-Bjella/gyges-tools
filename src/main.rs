@@ -28,7 +28,7 @@ const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else {
 const ENGINE_DATAGEN: &str = if cfg!(windows) { "./engines/gyges-v2.0.0-datagen.exe" } else { "./engines/gyges-v2.0.0-datagen" };
 
 fn main() {
-    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|nearbest[:margin]|none] [min_ply] [random_moves]` runs data gen with
+    // `gyges-tools datagen [dataset] [workers] [hours] [nodes] [net] [searched|wild|nearbest[:margin]|none] [min_ply] [random_moves] [seen]` runs data gen with
     // those overrides (for servers, no code edits needed).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("datagen") {
@@ -278,5 +278,10 @@ fn run_data_gen(overrides: &[String]) {
     // 8 cores / 16 threads: 14 workers for max output, 8 to keep the machine usable.
     let thread_count     = overrides.get(1).map_or(12, |w| w.parse().expect("workers must be a number"));
 
-    data_gen::generate_data_parallel(dataset, engine, schedules, opening == "wild", games_per_worker, max_hours, thread_count, false);
+    // ---- Repeat check ---------------------------------------------------
+    // A game whose position after the random plies was already played (in this dataset,
+    // or in the `seen` datasets, `+`-separated) is stopped there and not written.
+    let seen: Vec<String> = overrides.get(8).map_or(vec![], |s| s.split('+').filter(|d| !d.is_empty()).map(String::from).collect());
+
+    data_gen::generate_data_parallel(dataset, engine, schedules, opening == "wild", games_per_worker, max_hours, thread_count, &seen, false);
 }
