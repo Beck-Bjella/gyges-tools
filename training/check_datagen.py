@@ -11,7 +11,8 @@ import glob
 import os
 import sys
 
-from common import REPO_ROOT
+# Standard library only, so it runs on a data gen server without torch.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FORCED = 100000.0
 RANDOM_PLIES = int(sys.argv[2]) if len(sys.argv) > 2 else 4   # random opening plies (data gen random_moves x 2; none with opening `none`)
