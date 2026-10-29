@@ -37,7 +37,10 @@ def check(dataset):
     files = sorted(glob.glob(os.path.join(REPO_ROOT, "training", "data", dataset, "w*.csv")))
     problems = {}
     stats = dict(rows=0, games=0, forced=0, forced_vs_result_disagree=0, last_move_wins=0, draws=0,
-                 decided_at_root=0, lost_pv_differs=0, max_eval=0.0, min_proven=float("inf"))
+                 decided_at_root=0, lost_pv_differs=0, max_eval=0.0, min_proven=float("inf"),
+                 first_mover_wins=0, move_secs=0.0, openings=set(), opening_repeats=0)
+    searched_ply = {}                     # final ply of searched moves after the random plies
+    max_nodes_ply5 = 0                    # node cap: once ply 3 is done, no move should pass the cap by much
 
     def bad(kind, where):
         problems.setdefault(kind, []).append(where)
@@ -53,6 +56,17 @@ def check(dataset):
             board = [int(x) for x in r[:36]]
             result, move_num, game = int(r[36]), int(r[37]), int(r[38])
             score, ply, forced, best, nodes, pv, by_depth = r[39], int(r[40]), int(r[42]), r[43], r[44], r[45], r[46]
+            stats["move_secs"] += float(r[41])
+            if move_num == 0 and result == 1:
+                stats["first_mover_wins"] += 1
+            if move_num == RANDOM_PLIES:
+                key = tuple(board)
+                stats["opening_repeats"] += key in stats["openings"]
+                stats["openings"].add(key)
+            if move_num >= RANDOM_PLIES and score != "nan" and nodes not in ("", "0") and int(nodes) > 0:
+                searched_ply[ply] = searched_ply.get(ply, 0) + 1
+                if ply >= 5:
+                    max_nodes_ply5 = max(max_nodes_ply5, int(nodes))
 
             # Random opening plies carry no score (nan); only the first RANDOM_PLIES can be random.
             if score == "nan" and move_num >= RANDOM_PLIES:
@@ -121,6 +135,12 @@ def check(dataset):
           f"smallest proven |score| {stats['min_proven']:.0f}")
     print(f"  expected engine behaviour: {stats['decided_at_root']} rows decided at the root "
           f"(no nodes/pv), {stats['lost_pv_differs']} proven losses where the pv's first move != best")
+    n = sum(searched_ply.values()) or 1
+    print(f"  first mover wins {100 * stats['first_mover_wins'] / max(1, stats['games']):.1f}% (real play ~46%); "
+          f"games repeating an earlier position after the {RANDOM_PLIES} random plies: {stats['opening_repeats']}")
+    print("  searched moves, final ply: " + "  ".join(f"{p}: {100 * c / n:.1f}%" for p, c in sorted(searched_ply.items()))
+          + f"  | most nodes at ply 5+: {max_nodes_ply5:,}")
+    print(f"  speed: {stats['rows'] / max(1e-9, stats['move_secs'] / 3600):,.0f} rows per worker-hour (from move times)")
     if problems:
         for kind, where in problems.items():
             print(f"  FAIL {kind}: {len(where)} rows (first: {where[:3]})")
