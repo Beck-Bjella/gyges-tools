@@ -1611,3 +1611,17 @@ Caught by the user from the data gen log (`depth: mv1-5 1.00`): the 8 random ope
 Checks on the new engine: identical to v2.0.0 with the options off (300/300 positions, same move/score/nodes); minPly 3 @10k: no ply-1 stops; brute force (`ply3_pick_check.py`: exact ply-3 score of every legal move via separate searches, pool = within 0.1 of the best) vs 40 engine picks on 16 real opening positions: 639/640 picks inside the pool, one 0.008 below the margin (TT state between the two searches), pools 1–19 moves, 92% of each pool covered, every pick judged at ply 3; 9-min local data run: `random opening moves, final ply: 3: 100%` (old data: 1: 100%). Cost: an opening pick is now a real ply-3 search (~0.5–2 s on the laptop vs ~0.15 s) — the AWS smoke test gives the new speed.
 **No node cap on the random plies** (user): with `maxPly 3` the cap never applied anyway, so the random plies now run `randomize + randomMargin + maxPly 3` and no `maxNodes`; `minPly 3 + maxNodes` only on the normal moves. 6-min laptop check: opening rows all ply 3, median 69k nodes, max 460k; checks pass; first mover 38.6% on 127 games (±4.4, small sample — the AWS smoke test settles it). **Cost:** an opening pick is a full ply-3 search of a 200–600-move position with the margin widening the window — ~5 s on the laptop vs 0.17 s for the two-ply pick; laptop speed 2.3k rows/worker-h vs 16.5k. Expect the AWS run to be several times slower than the two-ply run (27k rows/worker-h); the smoke test gives the number.
 Pushed: tools `nnue` 373446a. The engine's force push over `datagen-options` was blocked, so the fixed engine is on a new branch **`datagen-ply3`** (0578518); GitHub's `datagen-options` (052bfd1) is the old two-ply version and must not be built.
+
+### Two-ply vs ply-3 opening picks, same positions (2026-10-29, late)
+
+User asked whether the two-ply picks (the stopped AWS run) are good enough to just finish, given ply-3 picks are ~7× slower. `pick_compare.py`: 24 real opening positions (3 per ply 1–8), 30 random picks each from the two-ply engine (052bfd1, its data gen settings) and the ply-3 engine (0578518, final recipe); every pick judged by brute force under the root's ply-3 lens (every opponent reply, then my ply-1 search, min over replies — the engine only searches odd plies, so no child search gives this; two earlier judge versions were wrong parity and are discarded). Best = the ply-3 root search.
+
+| | two-ply picks | ply-3 picks |
+|---|---|---|
+| forced-loss picks (lose by force within 4 plies) | **23/720 (3.2%)** — 12/30 and 11/30 in two ply-5 positions | 0/720 |
+| other picks: gap to the ply-3 best, mean / median / worst | 0.177 / 0.133 / 0.858 | 0.030 / 0.000 / 0.099 |
+| more than 0.1 behind (outside the margin) | **63%** | 0% |
+| more than 0.2 behind | 31% | 0% |
+| distinct picks per position (30 tries) | 6.7 | 5.9 |
+
+The two-ply check (move, best reply, static eval) can't see the mover's own follow-up, so it treats many moves as near-best that a ply-3 search rejects, and in some positions it picks moves that lose by force. Decision: ply-3 picks are the recipe; the two-ply AWS data (`gen3-10k-aws-2ply`, 2.84M) is kept only as a possible ablation. Cost accepted (~6–7 h / ~$25 per 5M on the c8a; smoke test gives the real number).
