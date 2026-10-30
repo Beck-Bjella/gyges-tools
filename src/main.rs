@@ -23,7 +23,7 @@ pub struct EngineConfig {
 /// Build it from the GygesRust repo and copy `target/release/gyges_engine(.exe)` here.
 const ENGINE_V2: &str = if cfg!(windows) { "./engines/gyges-v2.0.0.exe" } else { "./engines/gyges-v2.0.0" };
 
-/// GygesRust branch datagen-options: 2.0.0 plus the `minPly` and `randomMargin` options
+/// GygesRust branch datagen-ply3 (0578518): 2.0.0 plus the `minPly` and `randomMargin` options
 /// (plays identically to 2.0.0 with both off). Data gen uses it only when one is set.
 const ENGINE_DATAGEN: &str = if cfg!(windows) { "./engines/gyges-v2.0.0-datagen.exe" } else { "./engines/gyges-v2.0.0-datagen" };
 
