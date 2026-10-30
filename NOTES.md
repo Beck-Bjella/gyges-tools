@@ -49,7 +49,7 @@ Recipes (how the games were played and which rows are trained on):
 | Recipe | Opening | Search | Rows trained | Used for |
 |---|---|---|---|---|
 | **old** | `searched`: 4 random non-losing plies (first mover gets a head start) | node cap only (10k: ~11% of moves stop at ply 1) | all rows until 2026-10-27, then **moves 4+** (`MIN_MOVE_NUM = 4`, run tag `_from4`) | gen0–gen2 |
-| **new** | `nearbest`: 8 random plies (datagen `random_moves` 4) among moves within 0.1 of the best two-ply score (4 plies gave too few distinct openings: duplicate games) | node cap + `minPly 3` (every move sees the reply) | all rows (moves 4+ as an ablation) | gen3 on (needs `engines/gyges-v2.0.0-datagen.exe`, GygesRust branch `datagen-options`) |
+| **new** | `nearbest`: 8 random plies (datagen `random_moves` 4), each a random pick among moves within 0.1 of the best at a ply-3 search (4 plies gave too few distinct openings: duplicate games) | node cap + `minPly 3` (every move sees the reply) | all rows (moves 4+ as an ablation) | gen3 on (needs `engines/gyges-v2.0.0-datagen.exe`, GygesRust branch `datagen-options`) |
 
 ## Datasets
 

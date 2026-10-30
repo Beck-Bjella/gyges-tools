@@ -233,9 +233,9 @@ fn run_data_gen(overrides: &[String]) {
     // searched: the first two full moves are random non-losing moves, picked by the
     //           engine after a full search (filtered by what it proved losing)
     // wild:     the first two full moves are uniformly random, picked with no search
-    // nearbest: the first two full moves are random among moves whose two-ply score
-    //           (move, best reply, static eval) is within the margin of the best
-    //           (engine randomMargin; default 0.1 in tanh units, `nearbest:0.05` sets it)
+    // nearbest: the random moves are a random pick among moves within the margin of the best,
+    //           judged by a search to exactly min_ply (engine randomMargin: every move within
+    //           the margin gets an exact score; default 0.1 in tanh units, `nearbest:0.05` sets it)
     // none:     no random moves; every move is the engine's choice
     let opening = overrides.get(5).map_or("searched", String::as_str);
     let (opening, margin) = opening.split_once(':').unwrap_or((opening, "0.1"));
@@ -262,8 +262,9 @@ fn run_data_gen(overrides: &[String]) {
              if opening == "nearbest" { format!(" (margin {})", margin) } else { String::new() }, random_moves, min_ply, engine.path);
 
     let schedules = Schedules {
-        // nearbest picks its move apart from the search, so the random moves get a ply-1 search only
-        depth:     if opening == "nearbest" { [vec![1; random_moves], vec![60]].concat() } else { vec![60] },  // otherwise no depth cap
+        // nearbest: random moves are searched to exactly min_ply (every move within the margin scored
+        // at that one depth, like Stockfish's random_multi_pv_depth); all other moves, no depth cap
+        depth:     if opening == "nearbest" { [vec![min_ply.max(1); random_moves], vec![60]].concat() } else { vec![60] },
         time:      vec![30],         // 30 sec per move (safety cap; 5 s cut a few ply-3 searches short of the floor)
         randomize: if opening == "none" { vec![0] } else { [vec![1; random_moves], vec![0]].concat() },  // randomize the first random_moves moves only
         nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move

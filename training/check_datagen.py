@@ -41,6 +41,7 @@ def check(dataset):
                  decided_at_root=0, lost_pv_differs=0, max_eval=0.0, min_proven=float("inf"),
                  first_mover_wins=0, move_secs=0.0, openings=set(), opening_repeats=0)
     searched_ply = {}                     # final ply of searched moves after the random plies
+    opening_ply = {}                      # final ply of the random opening moves' searches
     max_nodes_ply5 = 0                    # node cap: once ply 3 is done, no move should pass the cap by much
 
     def bad(kind, where):
@@ -64,6 +65,8 @@ def check(dataset):
                 key = tuple(board)
                 stats["opening_repeats"] += key in stats["openings"]
                 stats["openings"].add(key)
+            if move_num < RANDOM_PLIES and nodes not in ("", "0") and int(nodes) > 0:
+                opening_ply[ply] = opening_ply.get(ply, 0) + 1
             if move_num >= RANDOM_PLIES and score != "nan" and nodes not in ("", "0") and int(nodes) > 0:
                 searched_ply[ply] = searched_ply.get(ply, 0) + 1
                 if ply >= 5:
@@ -141,6 +144,8 @@ def check(dataset):
           f"games repeating an earlier position after the {RANDOM_PLIES} random plies: {stats['opening_repeats']}")
     print("  searched moves, final ply: " + "  ".join(f"{p}: {100 * c / n:.1f}%" for p, c in sorted(searched_ply.items()))
           + f"  | most nodes at ply 5+: {max_nodes_ply5:,}")
+    m = sum(opening_ply.values()) or 1
+    print(f"  random opening moves, final ply: " + "  ".join(f"{p}: {100 * c / m:.1f}%" for p, c in sorted(opening_ply.items())))
     print(f"  speed: {stats['rows'] / max(1e-9, stats['move_secs'] / 3600):,.0f} rows per worker-hour (from move times)")
     if problems:
         for kind, where in problems.items():
