@@ -267,7 +267,9 @@ fn run_data_gen(overrides: &[String]) {
         depth:     if opening == "nearbest" { [vec![min_ply.max(1); random_moves], vec![60]].concat() } else { vec![60] },
         time:      vec![30],         // 30 sec per move (safety cap; 5 s cut a few ply-3 searches short of the floor)
         randomize: if opening == "none" { vec![0] } else { [vec![1; random_moves], vec![0]].concat() },  // randomize the first random_moves moves only
-        nodes:     vec![overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"))],  // default 10k nodes on every move
+        // nearbest random moves: a full search to min_ply, no node cap; every other move: the node cap
+        nodes:     { let n = overrides.get(3).map_or(10_000, |n| n.parse().expect("nodes must be a number"));
+                     if opening == "nearbest" { [vec![0; random_moves], vec![n]].concat() } else { vec![n] } },
     };
 
     // ---- Run length ---------------------------------------------------
